@@ -1,0 +1,25 @@
+apiVersion: flowmesh/v1
+kind: SSHTask
+metadata:
+  name: arul-edge-client-dev
+  annotations:
+    description: Development environment for the edge LLM client project
+
+spec:
+  taskType: ssh
+  interactive: true
+  user: flowmesh
+  authorizedKeys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
+  resources:
+    hardware:
+      gpu:
+        type: RTX 5080
+        count: 1
+      cpu: 8
+      memory: 32Gi
+  ttlSeconds: 28800
+  accessMode: forward
+  output:
+    destination:
+      type: http

@@ -1,0 +1,36 @@
+# ---- secrets -------------------------------------------------------------
+# .env holds the Lumid API token. THIS REPO IS PUBLIC — never commit it.
+.env
+.env.*
+*.pem
+*.key
+
+# ---- recorded traces -----------------------------------------------------
+# Traces contain real Claude Code prompts and source file contents, and run to
+# ~10MB per session. Public repo: keep them out. rsync them down instead.
+traces/
+*.jsonl
+
+# ---- python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# ---- model weights & caches ----------------------------------------------
+hf/
+models/
+*.safetensors
+*.gguf
+*.bin
+
+# ---- runtime -------------------------------------------------------------
+logs/
+*.log
+*.pid
+
+# ---- os ------------------------------------------------------------------
+.DS_Store

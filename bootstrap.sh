@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+#
+# bootstrap.sh — bring a fresh FlowMesh SSH box up to a working edge-LLM dev env.
+#
+# Sessions are disposable: the filesystem is wiped on TTL expiry, so this runs
+# from scratch every time. Target is under 10 minutes cold.
+#
+#   git clone <your-repo> && cd flowmesh && ./bootstrap.sh
+#
+# Phases (runs all in order by default, or name one to run just it):
+#
+#   check    env + GPU + sm_120 kernel support     ~30s,  no downloads
+#   install  uv, venv, vLLM, project deps          ~5min
+#   model    pull model weights                    ~3min, ~5GB
+#   serve    launch vLLM + edgeproxy, wait healthy ~2min
+#
+# Examples:
+#   ./bootstrap.sh check          # just the day-one sm_120 risk check
+#   ./bootstrap.sh                # everything
+#   MODEL=Qwen/Qwen3-8B-AWQ ./bootstrap.sh
+#
+set -euo pipefail
+
+# ---------------------------------------------------------------- config ----
+# Override any of these from the environment.
+
+MODEL="${MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct-AWQ}"
+SERVED_NAME="${SERVED_NAME:-local}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
+
+VLLM_PORT="${VLLM_PORT:-8001}"
+PROXY_PORT="${PROXY_PORT:-8000}"
+
+# vLLM on Blackwell consumer (sm_120) needs a CUDA 12.8+ build. If the default
+# wheel fails the check phase, this is the first knob to turn.
+VLLM_VERSION="${VLLM_VERSION:-}"           # empty = latest
+TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ------------------------------------------------------------- utilities ----
+
+log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Pick the biggest writable scratch location for weights and logs. The box
+# advertises ~80GB of local scratch but the mount point varies by worker.
+detect_scratch() {
+  local best="" best_free=0
+  for cand in /scratch /workspace /mnt/scratch /data "$HOME"; do
+    [ -d "$cand" ] && [ -w "$cand" ] || continue
+    local free
+    free=$(df -Pk "$cand" 2>/dev/null | awk 'NR==2 {print $4}') || continue
+    if [ "${free:-0}" -gt "$best_free" ]; then best="$cand"; best_free="$free"; fi
+  done
+  [ -n "$best" ] || die "no writable scratch directory found"
+  printf '%s' "$best"
+}
+
+SCRATCH="${SCRATCH:-$(detect_scratch)}"
+export HF_HOME="${HF_HOME:-$SCRATCH/hf}"
+LOG_DIR="$SCRATCH/logs"
+VENV="$SCRATCH/venv"
+
+# ----------------------------------------------------------------- check ----
+
+phase_check() {
+  log "scratch:  $SCRATCH ($(df -Ph "$SCRATCH" | awk 'NR==2 {print $4}') free)"
+  log "HF_HOME:  $HF_HOME"
+
+  command -v nvidia-smi >/dev/null || die "nvidia-smi not found — no GPU on this box?"
+  nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap \
+             --format=csv,noheader | sed 's/^/    /'
+
+  log "cpu: $(nproc) cores | mem: $(free -g | awk 'NR==2 {print $2}')Gi"
+
+  # The day-one schedule risk. A wheel can import fine and still have no
+  # kernels compiled for this architecture, which only fails at generation
+  # time — so check the compiled arch list explicitly, not just cuda.is_available().
+  if [ -x "$VENV/bin/python" ]; then
+    log "checking torch/vLLM sm_120 support"
+    "$VENV/bin/python" - <<'PY' || die "sm_120 check failed — see notes below"
+import sys
+import torch
+
+cap  = torch.cuda.get_device_capability()
+sm   = f"sm_{cap[0]}{cap[1]}"
+arch = torch.get_arch_list()
+
+print(f"    torch     {torch.__version__}  (cuda {torch.version.cuda})")
+print(f"    device    {torch.cuda.get_device_name(0)}  {sm}")
+print(f"    archs     {' '.join(arch)}")
+
+if sm not in arch and not any(a.startswith("sm_90") and cap[0] >= 9 for a in arch):
+    print(f"    !! torch has no kernels for {sm}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    import vllm
+    print(f"    vllm      {vllm.__version__}")
+except ImportError:
+    print("    vllm      not installed yet")
+PY
+  else
+    warn "venv not built yet — run './bootstrap.sh install' then re-check"
+  fi
+}
+
+# --------------------------------------------------------------- install ----
+
+phase_install() {
+  if ! command -v uv >/dev/null; then
+    log "installing uv"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+
+  log "creating venv at $VENV"
+  uv venv "$VENV" --python 3.12
+
+  log "installing vLLM (this is the slow part)"
+  local spec="vllm${VLLM_VERSION:+==$VLLM_VERSION}"
+  VIRTUAL_ENV="$VENV" uv pip install "$spec" --torch-backend=auto \
+    || VIRTUAL_ENV="$VENV" uv pip install "$spec" --extra-index-url "$TORCH_INDEX" \
+    || die "vLLM install failed — see the sm_120 fallback notes in PLAN.md §2"
+
+  if [ -f "$REPO_DIR/pyproject.toml" ]; then
+    log "installing project deps"
+    VIRTUAL_ENV="$VENV" uv pip install -e "$REPO_DIR"
+  else
+    warn "no pyproject.toml yet — skipping project install"
+  fi
+}
+
+# ----------------------------------------------------------------- model ----
+
+phase_model() {
+  log "pulling $MODEL into $HF_HOME"
+  mkdir -p "$HF_HOME"
+  VIRTUAL_ENV="$VENV" uv pip install -q "huggingface_hub[cli]"
+  "$VENV/bin/hf" download "$MODEL" \
+    || die "model download failed (gated repo? try 'hf auth login')"
+}
+
+# ----------------------------------------------------------------- serve ----
+
+wait_for_http() {
+  local url="$1" name="$2" timeout="${3:-300}" waited=0
+  log "waiting for $name at $url"
+  until curl -sf "$url" >/dev/null 2>&1; do
+    sleep 3; waited=$((waited + 3))
+    [ "$waited" -lt "$timeout" ] || die "$name did not come up in ${timeout}s — check $LOG_DIR"
+  done
+  log "$name is up (${waited}s)"
+}
+
+phase_serve() {
+  mkdir -p "$LOG_DIR"
+
+  log "starting vLLM on :$VLLM_PORT"
+  nohup "$VENV/bin/vllm" serve "$MODEL" \
+    --served-model-name "$SERVED_NAME" \
+    --port "$VLLM_PORT" \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --gpu-memory-utilization "$GPU_MEM_UTIL" \
+    --kv-cache-dtype "$KV_CACHE_DTYPE" \
+    --enable-prefix-caching \
+    > "$LOG_DIR/vllm.log" 2>&1 &
+  echo $! > "$LOG_DIR/vllm.pid"
+
+  wait_for_http "http://localhost:$VLLM_PORT/health" vLLM 600
+
+  # Provenance for the results directory — KV capacity in blocks is the number
+  # every prefix-cache and cohort experiment gets normalised against.
+  local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$REPO_DIR/results"
+  {
+    echo "timestamp    $stamp"
+    echo "model        $MODEL"
+    echo "max_model_len $MAX_MODEL_LEN  gpu_mem_util $GPU_MEM_UTIL  kv_dtype $KV_CACHE_DTYPE"
+    nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader
+    grep -iE 'gpu blocks|kv cache size|graph captur' "$LOG_DIR/vllm.log" | head -20 || true
+  } > "$REPO_DIR/results/env-$stamp.txt"
+  log "wrote results/env-$stamp.txt"
+
+  if [ -f "$REPO_DIR/edgeproxy/server.py" ]; then
+    log "starting edgeproxy on :$PROXY_PORT"
+    nohup "$VENV/bin/python" -m edgeproxy.server \
+      --port "$PROXY_PORT" --vllm-url "http://localhost:$VLLM_PORT" \
+      > "$LOG_DIR/proxy.log" 2>&1 &
+    echo $! > "$LOG_DIR/proxy.pid"
+    wait_for_http "http://localhost:$PROXY_PORT/health" edgeproxy 60
+  else
+    warn "edgeproxy not built yet — vLLM only"
+  fi
+
+  cat <<EOF
+
+  ready.
+
+    vLLM     http://localhost:$VLLM_PORT   (logs: $LOG_DIR/vllm.log)
+    proxy    http://localhost:$PROXY_PORT  (logs: $LOG_DIR/proxy.log)
+
+    point the harness at it:
+      export ANTHROPIC_BASE_URL=http://localhost:$PROXY_PORT
+
+    smoke test:
+      curl -s localhost:$VLLM_PORT/v1/completions -H 'content-type: application/json' \\
+        -d '{"model":"$SERVED_NAME","prompt":"hello","max_tokens":10}' | head -c 300
+
+    !! commit or rsync results/ before you disconnect — this box is disposable.
+
+EOF
+}
+
+# ------------------------------------------------------------------ main ----
+
+case "${1:-all}" in
+  check)   phase_check ;;
+  install) phase_install; phase_check ;;
+  model)   phase_model ;;
+  serve)   phase_serve ;;
+  all)     phase_check; phase_install; phase_model; phase_serve ;;
+  *)       die "unknown phase '$1' (check|install|model|serve|all)" ;;
+esac
