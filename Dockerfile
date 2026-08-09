@@ -9,8 +9,12 @@ FROM ghcr.io/mlsys-io/flowmesh_ssh:v0.1.7-gpu
 USER root
 
 # Everything that was missing on the stock image, plus the basics for working
-# in a disposable container.
+# in a disposable container. build-essential (gcc/g++/make/libc headers) is
+# required at *runtime*, not just for pip builds: Triton JIT-compiles a small
+# C extension the first time any Triton kernel runs, even with vLLM's
+# --enforce-eager, and the session user has no sudo/apt to install it later.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
         git \
