@@ -9,6 +9,7 @@ spec:
   taskType: ssh
   interactive: true
   user: flowmesh
+  image: ghcr.io/xxdydx/edge-llm-dev:latest
   authorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
   resources:

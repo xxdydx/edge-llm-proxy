@@ -5,7 +5,11 @@
 # Sessions are disposable: the filesystem is wiped on TTL expiry, so this runs
 # from scratch every time. Target is under 10 minutes cold.
 #
-#   git clone <your-repo> && cd flowmesh && ./bootstrap.sh
+# The session image has no git and no root, so fetch the repo as a tarball —
+# GitHub serves one for any public repo, no auth required:
+#
+#   curl -L https://github.com/xxdydx/edge-llm-proxy/archive/refs/heads/main.tar.gz | tar xz
+#   cd edge-llm-proxy-main && ./bootstrap.sh
 #
 # Phases (runs all in order by default, or name one to run just it):
 #
@@ -40,6 +44,16 @@ TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# .env holds ANTHROPIC_AUTH_TOKEN (the Lumid claude:proxy PAT) and any
+# EDGEPROXY_* overrides. It is gitignored — the repo is public — so it does not
+# arrive with `git clone` and has to be copied over separately each session.
+# Only `serve` needs it; `check` and `install` are fine without.
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a; . "$REPO_DIR/.env"; set +a
+else
+  warn_env=1
+fi
+
 # ------------------------------------------------------------- utilities ----
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -63,7 +77,11 @@ detect_scratch() {
 SCRATCH="${SCRATCH:-$(detect_scratch)}"
 export HF_HOME="${HF_HOME:-$SCRATCH/hf}"
 LOG_DIR="$SCRATCH/logs"
-VENV="$SCRATCH/venv"
+
+# Prefer the venv baked into the custom image (see Dockerfile) — it already has
+# Python 3.12 and the proxy deps. Fall back to building one on scratch when
+# running on the stock image.
+if [ -w /opt/venv ]; then VENV="${VENV:-/opt/venv}"; else VENV="${VENV:-$SCRATCH/venv}"; fi
 
 # ----------------------------------------------------------------- check ----
 
@@ -88,7 +106,7 @@ import torch
 
 cap  = torch.cuda.get_device_capability()
 sm   = f"sm_{cap[0]}{cap[1]}"
-arch = torch.get_arch_list()
+arch = torch.cuda.get_arch_list()
 
 print(f"    torch     {torch.__version__}  (cuda {torch.version.cuda})")
 print(f"    device    {torch.cuda.get_device_name(0)}  {sm}")
@@ -118,8 +136,12 @@ phase_install() {
     export PATH="$HOME/.local/bin:$PATH"
   fi
 
-  log "creating venv at $VENV"
-  uv venv "$VENV" --python 3.12
+  if [ -x "$VENV/bin/python" ]; then
+    log "reusing venv at $VENV"
+  else
+    log "creating venv at $VENV"
+    uv venv "$VENV" --python 3.12
+  fi
 
   log "installing vLLM (this is the slow part)"
   local spec="vllm${VLLM_VERSION:+==$VLLM_VERSION}"
@@ -186,10 +208,17 @@ phase_serve() {
   } > "$REPO_DIR/results/env-$stamp.txt"
   log "wrote results/env-$stamp.txt"
 
+  if [ -n "${warn_env:-}" ]; then
+    warn "no .env found — edgeproxy has no upstream token to relay."
+    warn "copy it over:  scp .env fmbox:$REPO_DIR/.env"
+  fi
+
   if [ -f "$REPO_DIR/edgeproxy/server.py" ]; then
     log "starting edgeproxy on :$PROXY_PORT"
     nohup "$VENV/bin/python" -m edgeproxy.server \
-      --port "$PROXY_PORT" --vllm-url "http://localhost:$VLLM_PORT" \
+      --port "$PROXY_PORT" \
+      --trace-dir "$REPO_DIR/traces" \
+      --vllm-url "http://localhost:$VLLM_PORT" \
       > "$LOG_DIR/proxy.log" 2>&1 &
     echo $! > "$LOG_DIR/proxy.pid"
     wait_for_http "http://localhost:$PROXY_PORT/health" edgeproxy 60
