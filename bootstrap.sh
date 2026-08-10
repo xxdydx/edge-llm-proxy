@@ -40,6 +40,13 @@ KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capaci
 #   VLLM_EXTRA_ARGS="-O0"              lowest compilation level
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
+# FlashInfer JIT-compiles its sampling kernels on first use, which needs ninja
+# *and* nvcc. The session image has neither (a full CUDA toolkit would add
+# gigabytes for a sampler), so vLLM dies late in startup with a bare
+# FileNotFoundError. FlashInfer is only used for top-p/top-k sampling here —
+# attention runs on FLASH_ATTN — so turning it off costs essentially nothing.
+export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
+
 VLLM_PORT="${VLLM_PORT:-8001}"
 PROXY_PORT="${PROXY_PORT:-8000}"
 
