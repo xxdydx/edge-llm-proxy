@@ -100,9 +100,18 @@ phase_check() {
   # time — so check the compiled arch list explicitly, not just cuda.is_available().
   if [ -x "$VENV/bin/python" ]; then
     log "checking torch/vLLM sm_120 support"
-    "$VENV/bin/python" - <<'PY' || die "sm_120 check failed — see notes below"
+    # The custom image ships a venv holding only the proxy deps, so "a venv
+    # exists" does not imply "torch is installed". Exit 2 means not-there-yet,
+    # which is fine before install; exit 1 means torch is present but has no
+    # kernels for this GPU, which is the case actually worth stopping for.
+    local rc=0
+    "$VENV/bin/python" - <<'PY' || rc=$?
 import sys
-import torch
+
+try:
+    import torch
+except ModuleNotFoundError:
+    sys.exit(2)
 
 cap  = torch.cuda.get_device_capability()
 sm   = f"sm_{cap[0]}{cap[1]}"
@@ -122,6 +131,11 @@ try:
 except ImportError:
     print("    vllm      not installed yet")
 PY
+    case "$rc" in
+      0) ;;
+      2) warn "torch not installed yet — sm_120 verdict deferred until after install" ;;
+      *) die "torch has no kernels for this GPU — see the sm_120 fallbacks in PLAN.md §2" ;;
+    esac
   else
     warn "venv not built yet — run './bootstrap.sh install' then re-check"
   fi
@@ -252,6 +266,8 @@ case "${1:-all}" in
   install) phase_install; phase_check ;;
   model)   phase_model ;;
   serve)   phase_serve ;;
-  all)     phase_check; phase_install; phase_model; phase_serve ;;
+  # check runs twice on purpose: once up front for GPU/scratch, and again after
+  # install, which is the first point at which the sm_120 verdict is knowable.
+  all)     phase_check; phase_install; phase_check; phase_model; phase_serve ;;
   *)       die "unknown phase '$1' (check|install|model|serve|all)" ;;
 esac
