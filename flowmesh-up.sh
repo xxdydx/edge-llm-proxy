@@ -67,6 +67,38 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 
 ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$@"; }
 
+# ------------------------------------------------------------ ssh config ----
+# The session port changes every time, so anything that wants a stable name —
+# VS Code Remote-SSH, scp, rsync, plain `ssh fmbox` — needs ~/.ssh/config
+# rewritten each run. Keep it inside markers so we replace our own block and
+# leave the rest of the user's config alone.
+update_ssh_config() {
+  local cfg="$HOME/.ssh/config"
+  local begin="# >>> flowmesh-up >>>" end="# <<< flowmesh-up <<<"
+  mkdir -p "$HOME/.ssh"; touch "$cfg"
+
+  awk -v b="$begin" -v e="$end" '
+    $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }
+  ' "$cfg" > "$cfg.tmp"
+
+  cat >> "$cfg.tmp" <<EOF
+$begin
+Host fmbox
+    HostName ${SSH_TARGET#*@}
+    User ${SSH_TARGET%@*}
+    Port $SSH_PORT
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+    ServerAliveInterval 30
+$end
+EOF
+
+  mv "$cfg.tmp" "$cfg"; chmod 600 "$cfg"
+  log "ssh alias 'fmbox' written to $cfg"
+}
+update_ssh_config
+
 # A freshly-ready session can still be a beat away from accepting SSH.
 log "waiting for the SSH port to actually accept connections"
 for _ in $(seq 1 20); do
@@ -105,7 +137,11 @@ cat <<EOF
     reconnect  flowmesh ssh connect $TASK_ID
     stop       flowmesh task stop $TASK_ID
 
-    to point a local harness at the box's proxy, forward the port over ssh:
-      ssh ${SSH_OPTS[*]} -N -L 8000:localhost:8000 $SSH_TARGET
+    connect      ssh fmbox
+    vs code      Remote-SSH: Connect to Host... -> fmbox   (auto-forwards ports)
+    copy files   scp fmbox:~/edge-llm-proxy-main/results/* ./results/
+
+    or forward the proxy port manually:
+      ssh -N -L 8000:localhost:8000 fmbox
 
 EOF
