@@ -34,6 +34,12 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
 
+# Spliced unquoted into the vLLM launch so it word-splits into separate flags.
+# The escape hatch when a backend misbehaves on this GPU, e.g.:
+#   VLLM_EXTRA_ARGS=--enforce-eager    skip torch.compile + CUDA graph capture
+#   VLLM_EXTRA_ARGS="-O0"              lowest compilation level
+VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+
 VLLM_PORT="${VLLM_PORT:-8001}"
 PROXY_PORT="${PROXY_PORT:-8000}"
 
@@ -183,12 +189,25 @@ phase_model() {
 
 # ----------------------------------------------------------------- serve ----
 
+# wait_for_http <url> <name> [timeout] [pid] [logfile]
+#
+# Polls until healthy, but watches the process too: if it has already exited
+# there is nothing to wait for, so bail immediately and print the tail of its
+# log rather than burning the full timeout on a corpse.
 wait_for_http() {
-  local url="$1" name="$2" timeout="${3:-300}" waited=0
+  local url="$1" name="$2" timeout="${3:-300}" pid="${4:-}" logfile="${5:-}" waited=0
   log "waiting for $name at $url"
   until curl -sf "$url" >/dev/null 2>&1; do
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      warn "$name (pid $pid) exited after ${waited}s without becoming healthy"
+      if [ -n "$logfile" ] && [ -f "$logfile" ]; then
+        warn "last 40 lines of $logfile:"
+        tail -40 "$logfile" >&2
+      fi
+      die "$name failed to start"
+    fi
     sleep 3; waited=$((waited + 3))
-    [ "$waited" -lt "$timeout" ] || die "$name did not come up in ${timeout}s — check $LOG_DIR"
+    [ "$waited" -lt "$timeout" ] || die "$name did not come up in ${timeout}s — check ${logfile:-$LOG_DIR}"
   done
   log "$name is up (${waited}s)"
 }
@@ -204,10 +223,13 @@ phase_serve() {
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --kv-cache-dtype "$KV_CACHE_DTYPE" \
     --enable-prefix-caching \
+    $VLLM_EXTRA_ARGS \
     > "$LOG_DIR/vllm.log" 2>&1 &
-  echo $! > "$LOG_DIR/vllm.pid"
+  local vllm_pid=$!
+  echo "$vllm_pid" > "$LOG_DIR/vllm.pid"
 
-  wait_for_http "http://localhost:$VLLM_PORT/health" vLLM 600
+  wait_for_http "http://localhost:$VLLM_PORT/health" vLLM 600 \
+    "$vllm_pid" "$LOG_DIR/vllm.log"
 
   # Provenance for the results directory — KV capacity in blocks is the number
   # every prefix-cache and cohort experiment gets normalised against.
@@ -234,8 +256,10 @@ phase_serve() {
       --trace-dir "$REPO_DIR/traces" \
       --vllm-url "http://localhost:$VLLM_PORT" \
       > "$LOG_DIR/proxy.log" 2>&1 &
-    echo $! > "$LOG_DIR/proxy.pid"
-    wait_for_http "http://localhost:$PROXY_PORT/health" edgeproxy 60
+    local proxy_pid=$!
+    echo "$proxy_pid" > "$LOG_DIR/proxy.pid"
+    wait_for_http "http://localhost:$PROXY_PORT/health" edgeproxy 60 \
+      "$proxy_pid" "$LOG_DIR/proxy.log"
   else
     warn "edgeproxy not built yet — vLLM only"
   fi
