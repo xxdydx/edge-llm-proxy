@@ -129,6 +129,77 @@ cd "$REPO_DIR_NAME"
 ./bootstrap.sh
 REMOTE
 
+# ------------------------------------------------------------- vs code ------
+# Remote-SSH cannot work here: the FlowMesh entrypoint writes
+#   AllowTcpForwarding no
+# into /etc/ssh/sshd_config.d/ at *container start*, so it is re-applied every
+# session no matter what the image contains. Tunnels dial out instead of needing
+# an inbound forwarded port, so they are unaffected.
+#
+# The tunnel login lives in ~/.vscode/cli/token.json on the box and dies with
+# the session. We stash it on the laptop after the first login and restore it on
+# every later run — otherwise you would re-authenticate with GitHub every single
+# time. Only the two small credential files are stashed; ~/.vscode/cli/servers/
+# is a ~100MB download that re-fetches on its own.
+
+VSCODE_STASH="$HOME/.flowmesh/vscode-cli.tar.gz"
+REMOTE_FOLDER="/home/flowmesh/$REPO_DIR_NAME"
+CODE_BIN="${CODE_BIN:-/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code}"
+
+vscode_tunnel() {
+  log "installing VS Code CLI on the box (if absent)"
+  ssh_run 'set -e
+    if [ ! -x ~/code ] && ! ls ~/.vscode-server/code-* >/dev/null 2>&1; then
+      curl -sL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" \
+        -o /tmp/vscode-cli.tgz && tar -xf /tmp/vscode-cli.tgz -C ~ && chmod +x ~/code
+    fi' || { warn "could not install the VS Code CLI"; return 1; }
+
+  if [ -f "$VSCODE_STASH" ]; then
+    log "restoring saved VS Code login"
+    ssh_run 'tar xzf - -C ~' < "$VSCODE_STASH" || warn "could not restore login"
+  fi
+
+  log "starting tunnel"
+  ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
+    tmux kill-session -t tunnel 2>/dev/null || true
+    rm -f ~/tunnel.log
+    tmux new -d -s tunnel "$CLI tunnel --accept-server-license-terms --name fmbox >~/tunnel.log 2>&1"'
+
+  local waited=0
+  while [ "$waited" -lt 90 ]; do
+    if ssh_run 'grep -qi "devtunnels.ms\|Open this link" ~/tunnel.log 2>/dev/null'; then
+      log "tunnel is up"
+      log "stashing login for next session"
+      mkdir -p "$(dirname "$VSCODE_STASH")"; chmod 700 "$(dirname "$VSCODE_STASH")"
+      ssh_run 'tar czf - -C ~ .vscode/cli/token.json .vscode/cli/code_tunnel.json 2>/dev/null' \
+        > "$VSCODE_STASH" && chmod 600 "$VSCODE_STASH" || true
+
+      if [ -x "$CODE_BIN" ]; then
+        log "opening VS Code"
+        "$CODE_BIN" --folder-uri "vscode-remote://tunnel+fmbox$REMOTE_FOLDER" || true
+      else
+        warn "VS Code CLI not found at: $CODE_BIN"
+        warn "open manually: vscode://vscode-remote/tunnel+fmbox$REMOTE_FOLDER"
+      fi
+      return 0
+    fi
+
+    if ssh_run 'grep -q "github.com/login/device" ~/tunnel.log 2>/dev/null'; then
+      warn "one-time GitHub login required — do this, then re-run ./flowmesh-up.sh:"
+      ssh_run 'cat ~/tunnel.log' >&2
+      warn "(the login is stashed afterwards, so this is only needed once)"
+      return 1
+    fi
+
+    sleep 3; waited=$((waited + 3))
+  done
+
+  warn "tunnel did not come up in ${waited}s — check: ssh fmbox 'cat ~/tunnel.log'"
+  return 1
+}
+
+vscode_tunnel || true
+
 cat <<EOF
 
   done.
