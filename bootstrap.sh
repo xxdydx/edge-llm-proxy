@@ -34,6 +34,13 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
 
+# vLLM serves Anthropic's /v1/messages natively (vllm/entrypoints/anthropic), so
+# the proxy forwards requests unchanged rather than translating to OpenAI shape.
+# Tool calling is off by default though: without these two flags, any request
+# carrying `tools` is rejected outright — which is every Claude Code main-loop
+# call. `hermes` is the parser for Qwen2.5; change it with the model.
+TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
+
 # Spliced unquoted into the vLLM launch so it word-splits into separate flags.
 # The escape hatch when a backend misbehaves on this GPU, e.g.:
 #   VLLM_EXTRA_ARGS=--enforce-eager    skip torch.compile + CUDA graph capture
@@ -230,6 +237,8 @@ phase_serve() {
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --kv-cache-dtype "$KV_CACHE_DTYPE" \
     --enable-prefix-caching \
+    --enable-auto-tool-choice \
+    --tool-call-parser "$TOOL_CALL_PARSER" \
     $VLLM_EXTRA_ARGS \
     > "$LOG_DIR/vllm.log" 2>&1 &
   local vllm_pid=$!
