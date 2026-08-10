@@ -9,7 +9,11 @@ spec:
   taskType: ssh
   interactive: true
   user: flowmesh
-  image: ghcr.io/xxdydx/edge-llm-dev:latest
+  # Pinned by digest, not by tag. A digest is the image's content hash, so there
+  # is no tag indirection and no chance of a worker serving a cached older build
+  # under the same name. Update this whenever the image is rebuilt.
+  # Built from commit d4f1f6f — linux/amd64, includes build-essential for Triton.
+  image: ghcr.io/xxdydx/edge-llm-dev@sha256:1fd4894dd7223661b8c2a8c76be77604b729078018046b96b5f721763ac6a1b3
   authorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
   resources:
