@@ -31,6 +31,25 @@ TASK_ID="$(echo "$SUBMIT_OUT" | grep -oE 'tsk-[a-f0-9-]+' | head -1)"
 [ -n "$TASK_ID" ] || die "couldn't parse a task ID out of 'flowmesh workflow submit' output above"
 log "task: $TASK_ID"
 
+# The script stays in the foreground for the life of the box, and Ctrl+C
+# releases the task. Deliberately NOT trapped on EXIT: if bootstrap fails we
+# want the box left alive to debug, not torn down. Set NO_AUTOSTOP=1 to keep the
+# task running after Ctrl+C.
+cleanup() {
+  trap - INT TERM HUP
+  printf '\n'
+  if [ -n "${NO_AUTOSTOP:-}" ]; then
+    log "leaving $TASK_ID running (NO_AUTOSTOP set)"
+    exit 0
+  fi
+  log "stopping task $TASK_ID"
+  flowmesh task stop "$TASK_ID" >/dev/null 2>&1 \
+    && log "task stopped" \
+    || warn "could not stop it — run: flowmesh task stop $TASK_ID"
+  exit 0
+}
+trap cleanup INT TERM HUP
+
 # ------------------------------------------------------- capture ssh info --
 # `flowmesh ssh connect` blocks until the session is ready, prints the exact
 # ssh(1) invocation it's about to exec into, then hands the terminal off to
@@ -231,4 +250,10 @@ cat <<EOF
     copy files   scp fmbox:~/$REPO_DIR_NAME/results/* ./results/
     tunnel logs  ssh fmbox 'tmux attach -t tunnel'
 
+  Leave this running. Ctrl+C stops the task and releases the GPU.
+
 EOF
+
+# Hold the foreground so Ctrl+C reaches the trap above. Nothing to poll — the
+# box is up and everything else runs on it.
+while true; do sleep 3600; done
