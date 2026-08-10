@@ -39,29 +39,48 @@ Submits the task, waits for SSH, writes an `fmbox` alias to `~/.ssh/config`,
 copies `.env`, fetches the repo on the box, and runs `bootstrap.sh`. Ends with a
 `ready.` banner and the task id.
 
-Then work on the box through VS Code:
-
-**Cmd+Shift+P → `Remote-SSH: Connect to Host…` → `fmbox`**
-
-VS Code reads `~/.ssh/config`, so the host appears automatically. You get an
-editor, an integrated terminal, and — the useful part — **automatic port
-forwarding**, so `localhost:8001/metrics` and `localhost:8000` are reachable
-from your Mac with no manual tunnels.
-
-The session port changes every time, which is why `flowmesh-up.sh` rewrites the
-alias on each run. It edits only its own block, delimited by
-`# >>> flowmesh-up >>>` markers, and leaves the rest of your config alone.
-
-First VS Code connection downloads ~100 MB of VS Code Server onto the box, and
-does so **every session** since the filesystem is wiped. Budget a minute or two.
-
-Other access:
+It also starts a VS Code tunnel and opens a window on the box's files, so on a
+normal day that one command is all of it.
 
 ```bash
 ssh fmbox                                          # plain shell
 scp fmbox:~/edge-llm-proxy-main/results/* results/ # pull results before the TTL
 flowmesh task stop <task-id>                       # release (TTL is 8h)
 ```
+
+### VS Code
+
+**Use Tunnels, not Remote-SSH.** Remote-SSH cannot work here: the FlowMesh
+entrypoint writes `AllowTcpForwarding no` into `/etc/ssh/sshd_config.d/` at
+*container start*, so it is reapplied every session no matter what the image
+contains. Remote-SSH needs a forwarded channel and fails with
+`channel N: open failed: administratively prohibited`.
+
+Tunnels dial **out** to Microsoft's relay instead, so the restriction doesn't
+apply. `flowmesh-up.sh` opens the window for you; to connect by hand:
+
+- <https://vscode.dev/tunnel/fmbox>, or
+- desktop VS Code → **Remote Explorer** → switch the dropdown from *SSH* to
+  **Tunnels** → `fmbox`
+
+Note both the SSH alias and the tunnel are named `fmbox`, so Remote Explorer
+shows two similar entries — the SSH one is the one that doesn't work.
+
+The tunnel login lives in `~/.vscode/cli/token.json` on the box and dies with
+the session, so `flowmesh-up.sh` stashes it to `~/.flowmesh/vscode-cli.tar.gz`
+and restores it each run. **That file is a real GitHub-issued credential** —
+mode 600, outside the repo, treat it like `.env`. If it's missing you'll get a
+one-time device-code prompt and the script will say so rather than hang.
+
+Run the tunnel under `tmux` if you start it manually, or it dies with your
+terminal:
+
+```bash
+ssh -t fmbox 'tmux new -s tunnel "~/.vscode-server/code-* tunnel --name fmbox"'
+```
+
+First connection downloads ~100 MB of VS Code Server onto the box, and does so
+**every session** since the disk is wiped. Budget a minute or two.
 
 On the box: vLLM on `:8001`, edgeproxy on `:8000`. Point a harness at it with
 `export ANTHROPIC_BASE_URL=http://localhost:8000`.
@@ -73,7 +92,7 @@ On the box: vLLM on `:8001`, edgeproxy on `:8000`. Point a harness at it with
 The split is deliberate: **stable things are baked into the image, things still
 being iterated on are installed per session.**
 
-| | In the image | Installed by `bootstrap.sh` |
+| Component | In the image | Installed by `bootstrap.sh` |
 | --- | --- | --- |
 | system tools | gcc/build-essential, git, curl, tmux, rsync | — |
 | python | 3.12 + venv at `/opt/venv` | — |
