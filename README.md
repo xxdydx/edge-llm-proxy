@@ -147,9 +147,37 @@ couples the slowest operation to a decision that's still changing.
 runtime, several minutes into vLLM startup, and fails with an unhelpful
 traceback without a compiler.
 
+### Bringing up vLLM + Qwen on the box
+
+`./flowmesh-up.sh` already does this. To do it by hand:
+
+```bash
+ssh fmbox
+cd ~ && rm -rf edge-llm-proxy-main
+curl -sL https://github.com/xxdydx/edge-llm-proxy/archive/refs/heads/main.tar.gz | tar xz
+cd edge-llm-proxy-main
+cp ~/.env .env          # if you copied one over
+./bootstrap.sh
+```
+
+Defaults: **`Qwen/Qwen2.5-Coder-7B-Instruct-AWQ`**, 4-bit AWQ, 32K context,
+`--gpu-memory-utilization 0.90`, prefix caching on, tool calling on with the
+`hermes` parser. Serves on `:8001`, edgeproxy on `:8000`.
+
+Cold run is ~15 min: vLLM install ~5, weights ~3 (5 GB), engine startup ~4
+(CUDA graph capture dominates).
+
+Check it works:
+
+```bash
+curl -s localhost:8001/v1/messages -H 'content-type: application/json' \
+  -d '{"model":"local","max_tokens":60,
+       "messages":[{"role":"user","content":"Name three Python web frameworks."}]}'
+```
+
 ### `bootstrap.sh`
 
-Runs on the box. Four phases, all four by default, or name one:
+Four phases, all four by default, or name one:
 
 ```bash
 ./bootstrap.sh check      # GPU, scratch, sm_120 kernel support   ~30s
@@ -160,11 +188,21 @@ Runs on the box. Four phases, all four by default, or name one:
 
 Overridable via environment:
 
+| Variable | Default |
+| --- | --- |
+| `MODEL` | `Qwen/Qwen2.5-Coder-7B-Instruct-AWQ` |
+| `SERVED_NAME` | `local` (space-separated list for aliases) |
+| `MAX_MODEL_LEN` | `32768` |
+| `GPU_MEM_UTIL` | `0.90` |
+| `KV_CACHE_DTYPE` | `auto` (`fp8` roughly doubles KV capacity) |
+| `TOOL_CALL_PARSER` | `hermes` (model-specific) |
+| `VLLM_EXTRA_ARGS` | empty (`--enforce-eager` skips CUDA graphs) |
+| `VLLM_PORT` / `PROXY_PORT` | `8001` / `8000` |
+
 ```bash
 MODEL=Qwen/Qwen3-8B-AWQ ./bootstrap.sh
 MAX_MODEL_LEN=8192 GPU_MEM_UTIL=0.85 ./bootstrap.sh serve
-VLLM_EXTRA_ARGS=--enforce-eager ./bootstrap.sh serve
-KV_CACHE_DTYPE=fp8 ./bootstrap.sh serve      # roughly doubles KV capacity
+KV_CACHE_DTYPE=fp8 ./bootstrap.sh serve
 ```
 
 `serve` writes `results/env-<timestamp>.txt` with the GPU details and KV cache

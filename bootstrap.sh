@@ -273,7 +273,7 @@ phase_serve() {
     log "starting edgeproxy on :$PROXY_PORT"
     nohup "$VENV/bin/python" -m edgeproxy.server \
       --port "$PROXY_PORT" \
-      --trace-dir "$REPO_DIR/traces" \
+      --trace-dir "${EDGEPROXY_TRACE_DIR:-$REPO_DIR/traces}" \
       --vllm-url "http://localhost:$VLLM_PORT" \
       > "$LOG_DIR/proxy.log" 2>&1 &
     local proxy_pid=$!
