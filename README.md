@@ -48,6 +48,46 @@ scp fmbox:~/edge-llm-proxy-main/results/* results/ # pull results before the TTL
 flowmesh task stop <task-id>                       # release (TTL is 8h)
 ```
 
+## Recording traces
+
+On the laptop. Needs no GPU — v0 forwards everything to cloud and records it.
+
+```bash
+source ./trace-up.sh     # must be sourced, not executed
+claude
+```
+
+Starts edgeproxy on `:8765`, loads `.env`, exports `ANTHROPIC_BASE_URL`.
+Traces land in `traces/YYYY-MM-DD.jsonl`.
+
+```bash
+.venv/bin/python -m edgeproxy.trace.inspect traces/*.jsonl   # summary
+kill $(cat logs/proxy.pid)                                   # stop
+```
+
+## Running Claude Code against the local model
+
+On the box, once `bootstrap.sh` has vLLM up:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash     # once per session, no root needed
+export PATH="$HOME/.local/bin:$PATH"
+
+export ANTHROPIC_BASE_URL=http://localhost:8001    # vLLM directly
+export ANTHROPIC_AUTH_TOKEN=dummy                  # vLLM ignores it
+claude
+```
+
+vLLM validates the model name, so it must be one of `--served-model-name`.
+Claude Code asks for `claude-sonnet-5` and similar, so serve those aliases too:
+
+```bash
+SERVED_NAME="local claude-sonnet-5 claude-haiku-4-5-20251001" ./bootstrap.sh serve
+```
+
+Expect tool-calling turns to fail — a 4-bit 7B does not reliably emit the
+`<tool_call>` format the parser needs. Sidecalls work.
+
 ### VS Code
 
 **Use Tunnels, not Remote-SSH.** Remote-SSH cannot work here: the FlowMesh

@@ -29,6 +29,10 @@ set -euo pipefail
 # Override any of these from the environment.
 
 MODEL="${MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct-AWQ}"
+# Unquoted at the call site so multiple names word-split into separate aliases.
+# vLLM rejects requests naming a model it does not serve, and Claude Code asks
+# for "claude-sonnet-5" et al, so those need to be aliases if you point the
+# harness straight at vLLM.
 SERVED_NAME="${SERVED_NAME:-local}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
@@ -231,7 +235,7 @@ phase_serve() {
 
   log "starting vLLM on :$VLLM_PORT"
   nohup "$VENV/bin/vllm" serve "$MODEL" \
-    --served-model-name "$SERVED_NAME" \
+    --served-model-name $SERVED_NAME \
     --port "$VLLM_PORT" \
     --max-model-len "$MAX_MODEL_LEN" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
