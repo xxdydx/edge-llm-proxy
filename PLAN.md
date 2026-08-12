@@ -76,6 +76,14 @@ rate, and it gives the router a real difficulty signal instead of a synthetic
 one. Widen the local class over time as quality gating proves out; the *shape of
 that boundary* is itself a result worth plotting.
 
+**Deviation from the onboarding brief's Tier 0** (`edge-llm-client.md`, the
+SSOT): the brief specifies a rule-based router keyed on prompt length +
+prefix-cache-hit + queue depth. This plan substitutes call-class (tools vs.
+no-tools) as the sole wk1–2 signal — call-class is the dominant constraint a
+quantized 7B actually faces, and cache-hit/queue-depth are folded into the
+utility router in weeks 4–6 instead of v0. Noted explicitly so it's a
+deliberate substitution, not silent drift from the brief.
+
 ### 1.3 Cache hotness must be queryable *before* you commit a request
 
 The Tier 2 idea needs the router to know "how many tokens of this prospective
@@ -237,12 +245,19 @@ a divergence that was fine, and the number that makes the paper credible.
 - [ ] `POST /v1/messages/count_tokens`, `/v1/models`.
 - [ ] Anthropic↔OpenAI translation: system prompt, multi-part content, `tool_use`
       / `tool_result` ↔ OpenAI tool calls, stop reasons.
-- [ ] Cloud passthrough backend + proxy-side link shaping.
+- [ ] Cloud passthrough backend + proxy-side link shaping. **Note**: the
+      onboarding brief's wk1–2 plan calls for a *stub* cloud backend; this plan
+      uses the real Lumid-fronted Anthropic API from the start, so wk1–2 dev
+      traffic already incurs real cloud spend — intentional, but be deliberate
+      about volume.
 - [ ] Router v0: static call-class rule (§1.2).
 - [ ] Trace recorder → JSONL.
 - [ ] Measurement hooks: TTFT, ITL, e2e, tokens in/out, placement, $ estimate.
 - **Deliverable**: Claude Code session driven end-to-end, sidecalls served local,
-  main loop to cloud, with a latency/cost table.
+  main loop to cloud, **routed over the proxy-side throttled link (§4)**, with a
+  latency/cost table. (The onboarding brief's wk2 milestone requires the routed
+  call be measured over a throttled link, not just routed — don't let this
+  quietly drop.)
 
 ### Weeks 3–5 — local serving, prefix cache, batching
 

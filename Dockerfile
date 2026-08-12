@@ -40,6 +40,21 @@ RUN uv python install 3.12 \
     && uv pip install --python /opt/venv/bin/python \
         fastapi 'uvicorn[standard]' httpx
 
+# Claude Code is NOT baked in. Its installer runs the downloaded amd64 binary
+# to verify itself, which segfaults (exit 139) under the QEMU emulation this
+# cross-build uses. bootstrap.sh installs it at runtime instead, where it runs
+# on real amd64 hardware. Put the eventual location on PATH regardless.
+ENV PATH=/home/flowmesh/.local/bin:$PATH
+
+# The VS Code CLI, so tunnels do not re-download it every session. Remote-SSH
+# cannot work here (the entrypoint sets AllowTcpForwarding no at container
+# start), so tunnels are the only route in.
+RUN curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" \
+      -o /tmp/vscode-cli.tgz \
+    && tar -xf /tmp/vscode-cli.tgz -C /usr/local/bin \
+    && chmod a+rx /usr/local/bin/code \
+    && rm -f /tmp/vscode-cli.tgz
+
 # The session user (created by the entrypoint at container start, UID unknown
 # at build time — see above) needs to write here: bootstrap.sh installs vLLM
 # into this venv at runtime. World-writable is fine — this is a single-tenant

@@ -25,10 +25,34 @@
 #
 set -euo pipefail
 
+# =============================================================================
+#  MODEL — change these two lines to swap models. Nothing else needs touching.
+#
+#  The parser is model-specific and must match, or tool calls are emitted as
+#  plain text and the harness never executes them.
+#
+#    MODEL                                    TOOL_CALL_PARSER   notes
+#    Qwen/Qwen2.5-7B-Instruct-AWQ             hermes             ~139K KV tokens
+#    Qwen/Qwen3-8B-AWQ                        hermes             2.6x KV/token —
+#                                                                use KV_CACHE_DTYPE=fp8
+#    Qwen/Qwen2.5-Coder-7B-Instruct-AWQ       hermes             codes well, does
+#                                                                NOT emit <tool_call>
+#    mistralai/Ministral-8B-Instruct-2410     mistral
+#    Salesforce/xLAM-2-8b-fc-r                xlam               function-calling
+#                                                                specialist
+#    meta-llama/Llama-3.1-8B-Instruct         llama
+#
+#  Avoid for this project: Devstral 24B (no KV headroom left) and Granite 4
+#  hybrids (Mamba layers have no KV cache to reuse, which removes the thing
+#  the prefix-cache experiments measure).
+# =============================================================================
+
+MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}"
+TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
+
 # ---------------------------------------------------------------- config ----
 # Override any of these from the environment.
 
-MODEL="${MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct-AWQ}"
 # Unquoted at the call site so multiple names word-split into separate aliases.
 # vLLM rejects requests naming a model it does not serve, and Claude Code asks
 # for "claude-sonnet-5" et al, so those need to be aliases if you point the
@@ -37,13 +61,6 @@ SERVED_NAME="${SERVED_NAME:-local}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
-
-# vLLM serves Anthropic's /v1/messages natively (vllm/entrypoints/anthropic), so
-# the proxy forwards requests unchanged rather than translating to OpenAI shape.
-# Tool calling is off by default though: without these two flags, any request
-# carrying `tools` is rejected outright — which is every Claude Code main-loop
-# call. `hermes` is the parser for Qwen2.5; change it with the model.
-TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 
 # Spliced unquoted into the vLLM launch so it word-splits into separate flags.
 # The escape hatch when a backend misbehaves on this GPU, e.g.:
@@ -197,6 +214,22 @@ phase_install() {
 
 # ----------------------------------------------------------------- model ----
 
+# Claude Code — the harness. Installed here rather than in the image because
+# its installer executes the downloaded amd64 binary to verify itself, which
+# segfaults under the QEMU emulation the cross-build uses. Runs fine here, on
+# real hardware. No root needed; lands in ~/.local/bin.
+phase_harness() {
+  if command -v claude >/dev/null; then
+    log "claude already installed: $(command -v claude)"
+    return 0
+  fi
+  log "installing Claude Code"
+  curl -fsSL https://claude.ai/install.sh | bash \
+    || { warn "Claude Code install failed — the box still serves, you just cannot drive it from here"; return 0; }
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v claude >/dev/null && log "claude: $(command -v claude)"
+}
+
 phase_model() {
   log "pulling $MODEL into $HF_HOME"
   mkdir -p "$HF_HOME"
@@ -309,9 +342,10 @@ case "${1:-all}" in
   check)   phase_check ;;
   install) phase_install; phase_check ;;
   model)   phase_model ;;
+  harness) phase_harness ;;
   serve)   phase_serve ;;
   # check runs twice on purpose: once up front for GPU/scratch, and again after
   # install, which is the first point at which the sm_120 verdict is knowable.
-  all)     phase_check; phase_install; phase_check; phase_model; phase_serve ;;
-  *)       die "unknown phase '$1' (check|install|model|serve|all)" ;;
+  all)     phase_check; phase_install; phase_check; phase_harness; phase_model; phase_serve ;;
+  *)       die "unknown phase '$1' (check|install|harness|model|serve|all)" ;;
 esac

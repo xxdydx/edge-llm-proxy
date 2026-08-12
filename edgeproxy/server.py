@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .config import Config, parse_args
+from . import router
 from .trace.record import TraceWriter, parse_sse, reassemble, redact_headers
 
 log = logging.getLogger("edgeproxy")
@@ -52,19 +53,31 @@ def _usage_of(payload: Any) -> dict[str, Any]:
 def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
 
+    policy = router.build(cfg.policy)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.client = httpx.AsyncClient(
-            base_url=cfg.upstream,
-            # Long generations are normal; only the connect phase should be brisk.
-            timeout=httpx.Timeout(600.0, connect=10.0),
-            follow_redirects=True,
+        # One client per destination. Both speak the Anthropic API, so placement
+        # is purely a choice of base URL — nothing downstream needs to know which
+        # was picked.
+        app.state.clients = {
+            name: httpx.AsyncClient(
+                base_url=url,
+                # Long generations are normal; only connect should be brisk.
+                timeout=httpx.Timeout(600.0, connect=10.0),
+                follow_redirects=True,
+            )
+            for name, url in cfg.backends.items()
+        }
+        log.info(
+            "policy=%s cloud=%s local=%s traces=%s",
+            policy.name, cfg.upstream, cfg.vllm_url, cfg.trace_dir,
         )
-        log.info("upstream=%s traces=%s", cfg.upstream, cfg.trace_dir)
         try:
             yield
         finally:
-            await app.state.client.aclose()
+            for client in app.state.clients.values():
+                await client.aclose()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 
@@ -90,17 +103,46 @@ def make_app(cfg: Config) -> FastAPI:
 
         streaming = isinstance(request_json, dict) and bool(request_json.get("stream"))
 
+        # Only /v1/messages is a routable call; everything else (count_tokens,
+        # /v1/models, health probes) goes to cloud so behaviour is unchanged.
+        placement = "cloud"
+        clamped_to: int | None = None
+        if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
+            try:
+                features = router.extract_features(request_json)
+                placement = policy.decide(features)
+                # The harness reserves max_tokens: 64000 on nearly every call.
+                # vLLM checks prompt + max_tokens against max_model_len up
+                # front, so forwarding that reservation unchanged would 500 on
+                # calls whose prompts fit fine. Rewrite it for local only —
+                # cloud gets the request exactly as sent.
+                if placement == "local" and hasattr(policy, "effective_max_tokens"):
+                    want = policy.effective_max_tokens(features)
+                    if want != request_json.get("max_tokens"):
+                        request_json["max_tokens"] = want
+                        body = json.dumps(request_json).encode()
+                        clamped_to = want
+            except Exception:
+                log.exception("router failed — falling back to cloud")
+                placement = "cloud"
+
         record: dict[str, Any] = {
             "id": str(uuid.uuid4()),
             "ts": time.time(),
             "path": "/" + path,
             "method": request.method,
             "stream": streaming,
+            "placement": placement,
+            "policy": policy.name,
+            # None unless we rewrote max_tokens for local. Recorded so a
+            # stop_reason of "max_tokens" can be attributed to the clamp rather
+            # than mistaken for the model choosing to stop.
+            "clamped_max_tokens": clamped_to,
             "headers": redact_headers(request.headers),
             "request": request_json,
         }
 
-        client: httpx.AsyncClient = request.app.state.client
+        client: httpx.AsyncClient = request.app.state.clients[placement]
         upstream_request = client.build_request(
             request.method,
             "/" + path,
