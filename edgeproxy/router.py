@@ -8,6 +8,13 @@ from typing import Any, Literal, Protocol
 
 Placement = Literal["local", "cloud"]
 
+
+@dataclass(frozen=True)
+class Decision:
+    placement: Placement
+    reason: str
+    detail: str | None = None
+
 CHARS_PER_TOKEN = 4  # just a rough estimate
 
 
@@ -88,7 +95,7 @@ class Policy(Protocol):
 
     name: str
 
-    def decide(self, f: CallFeatures) -> Placement: ...
+    def decide(self, f: CallFeatures) -> Decision: ...
 
 
 class CloudOnly:
@@ -96,8 +103,8 @@ class CloudOnly:
 
     name = "cloud-only"
 
-    def decide(self, f: CallFeatures) -> Placement:
-        return "cloud"
+    def decide(self, f: CallFeatures) -> Decision:
+        return Decision("cloud", "policy")
 
 
 class LocalOnly:
@@ -105,8 +112,8 @@ class LocalOnly:
 
     name = "local-only"
 
-    def decide(self, f: CallFeatures) -> Placement:
-        return "local"
+    def decide(self, f: CallFeatures) -> Decision:
+        return Decision("local", "policy")
 
 
 class StaticPolicy:
@@ -142,18 +149,18 @@ class StaticPolicy:
         headroom = max(0, self.budget() - f.est_prompt_tokens)
         return max(1, min(f.max_tokens, self.clamp_max_tokens, headroom))
 
-    def decide(self, f: CallFeatures) -> Placement:
+    def decide(self, f: CallFeatures) -> Decision:
         if f.has_server_tools:
-            return "cloud"
+            return Decision("cloud", "server-side-tool")
 
-        # capacity
-        if f.est_prompt_tokens + self.effective_max_tokens(f) > self.budget():
-            return "cloud"
+        need = f.est_prompt_tokens + self.effective_max_tokens(f)
+        if need > self.budget():
+            return Decision("cloud", "too-large", f"{need} > {self.budget()} tokens")
 
         if f.has_tools and not self.local_can_tool_call:
-            return "cloud"
+            return Decision("cloud", "tools-unsupported")
 
-        return "local"
+        return Decision("local", "fits")
 
 
 POLICIES: dict[str, type] = {

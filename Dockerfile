@@ -40,10 +40,21 @@ RUN uv python install 3.12 \
     && uv pip install --python /opt/venv/bin/python \
         fastapi 'uvicorn[standard]' httpx
 
-# Claude Code is NOT baked in. Its installer runs the downloaded amd64 binary
-# to verify itself, which segfaults (exit 139) under the QEMU emulation this
-# cross-build uses. bootstrap.sh installs it at runtime instead, where it runs
-# on real amd64 hardware. Put the eventual location on PATH regardless.
+# Claude Code — the harness under test.
+#
+# Fetched directly rather than via claude.ai/install.sh. That installer
+# downloads a Bun standalone executable and then *runs* it to self-install,
+# which segfaults under the QEMU emulation this cross-build uses ("qemu:
+# uncaught target signal 11") — and it cleans up the download on failure, so
+# there is nothing to salvage. The binary needs no installation beyond being
+# on PATH and executable, so download it and skip the self-install entirely.
+RUN v="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" \
+    && echo "claude code $v" \
+    && curl -fsSL -o /usr/local/bin/claude \
+         "https://downloads.claude.ai/claude-code-releases/$v/linux-x64/claude" \
+    && chmod a+rx /usr/local/bin/claude \
+    && test -s /usr/local/bin/claude
+
 ENV PATH=/home/flowmesh/.local/bin:$PATH
 
 # The VS Code CLI, so tunnels do not re-download it every session. Remote-SSH

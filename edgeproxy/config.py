@@ -19,6 +19,9 @@ class Config:
     trace_dir: Path
     vllm_url: str
     policy: str
+    # vLLM rejects any model name it does not serve, and the harness asks for
+    # real Claude names. Local-routed requests get rewritten to this.
+    local_model_name: str
 
     @property
     def backends(self) -> dict[str, str]:
@@ -50,6 +53,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
         default=env("EDGEPROXY_POLICY", "cloud-only"),
         help="placement policy: cloud-only | local-only | static",
     )
+    p.add_argument(
+        "--local-model-name",
+        default=env("EDGEPROXY_LOCAL_MODEL_NAME", "local"),
+        help="what vLLM is served as; local-routed requests are rewritten to it",
+    )
     a = p.parse_args(argv)
 
     return Config(
@@ -59,4 +67,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         trace_dir=Path(a.trace_dir),
         vllm_url=a.vllm_url,
         policy=a.policy,
+        local_model_name=a.local_model_name,
     )

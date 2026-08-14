@@ -13,6 +13,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Any
 
 import httpx
@@ -106,22 +107,32 @@ def make_app(cfg: Config) -> FastAPI:
         # Only /v1/messages is a routable call; everything else (count_tokens,
         # /v1/models, health probes) goes to cloud so behaviour is unchanged.
         placement = "cloud"
+        reason = "not-routable"
+        detail: str | None = None
         clamped_to: int | None = None
+        original_model: str | None = None
+        feature_dict: dict[str, Any] | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
                 features = router.extract_features(request_json)
-                placement = policy.decide(features)
-                # The harness reserves max_tokens: 64000 on nearly every call.
-                # vLLM checks prompt + max_tokens against max_model_len up
-                # front, so forwarding that reservation unchanged would 500 on
-                # calls whose prompts fit fine. Rewrite it for local only —
-                # cloud gets the request exactly as sent.
-                if placement == "local" and hasattr(policy, "effective_max_tokens"):
-                    want = policy.effective_max_tokens(features)
-                    if want != request_json.get("max_tokens"):
-                        request_json["max_tokens"] = want
+                feature_dict = asdict(features)
+                decision = policy.decide(features)
+                placement, reason, detail = decision.placement, decision.reason, decision.detail
+
+                # Local-only rewrites; cloud gets the request exactly as sent.
+                if placement == "local":
+                    if request_json.get("model") != cfg.local_model_name:
+                        original_model = request_json.get("model")
+                        request_json["model"] = cfg.local_model_name
+
+                    if hasattr(policy, "effective_max_tokens"):
+                        want = policy.effective_max_tokens(features)
+                        if want != request_json.get("max_tokens"):
+                            request_json["max_tokens"] = want
+                            clamped_to = want
+
+                    if original_model is not None or clamped_to is not None:
                         body = json.dumps(request_json).encode()
-                        clamped_to = want
             except Exception:
                 log.exception("router failed — falling back to cloud")
                 placement = "cloud"
@@ -133,11 +144,13 @@ def make_app(cfg: Config) -> FastAPI:
             "method": request.method,
             "stream": streaming,
             "placement": placement,
+            "reason": reason,
+            "reason_detail": detail,
             "policy": policy.name,
-            # None unless we rewrote max_tokens for local. Recorded so a
-            # stop_reason of "max_tokens" can be attributed to the clamp rather
-            # than mistaken for the model choosing to stop.
             "clamped_max_tokens": clamped_to,
+            "original_model": original_model,
+            "backend": cfg.backends[placement],
+            "features": feature_dict,
             "headers": redact_headers(request.headers),
             "request": request_json,
         }
