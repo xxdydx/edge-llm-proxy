@@ -13,15 +13,23 @@ USER root
 # required at *runtime*, not just for pip builds: Triton JIT-compiles a small
 # C extension the first time any Triton kernel runs, even with vLLM's
 # --enforce-eager, and the session user has no sudo/apt to install it later.
+#
+# python3 and jq are here because agents reach for them constantly and cannot
+# install anything themselves. A system python3 is deliberate even though
+# /opt/venv has one: the venv belongs to the proxy (and later vLLM), so an
+# agent scripting a one-liner should not be able to disturb it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
         git \
+        jq \
         less \
+        python3 \
         rsync \
         tmux \
         vim-tiny \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # uv ships as a static binary — copying it from the official image avoids
@@ -39,6 +47,17 @@ RUN uv python install 3.12 \
     && uv venv /opt/venv --python 3.12 \
     && uv pip install --python /opt/venv/bin/python \
         fastapi 'uvicorn[standard]' httpx
+
+# Node, from the official tarball rather than apt — Debian's package trails
+# several major versions, and agents that shell out to node/npx expect current
+# behaviour. Resolves the newest LTS at build time; jq is available by now.
+RUN v="$(curl -fsSL https://nodejs.org/dist/index.json \
+           | jq -r '[.[] | select(.lts != false)][0].version')" \
+    && echo "node $v" \
+    && curl -fsSL "https://nodejs.org/dist/$v/node-$v-linux-x64.tar.xz" \
+       | tar -xJ -C /usr/local --strip-components=1 \
+             --exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
+    && node --version && npm --version
 
 # Claude Code — the harness under test.
 #
@@ -65,6 +84,17 @@ RUN curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-a
     && tar -xf /tmp/vscode-cli.tgz -C /usr/local/bin \
     && chmod a+rx /usr/local/bin/code \
     && rm -f /tmp/vscode-cli.tgz
+
+# Dockerfile ENV does not reach an SSH session: sshd builds a fresh PATH for
+# login shells and PAM reads /etc/environment, neither of which sees the ENV
+# above. Without this, /opt/venv/bin is invisible and `python3` resolves only
+# to the apt one — the symptom that showed up as "python3: command not found"
+# before python3 was installed at all.
+RUN touch /etc/environment \
+    && sed -i '/^PATH=/d' /etc/environment \
+    && printf 'PATH="%s"\n' "$PATH" >> /etc/environment \
+    && printf 'export PATH="%s"\n' "$PATH" > /etc/profile.d/10-edge-llm.sh \
+    && chmod a+rx /etc/profile.d/10-edge-llm.sh
 
 # The session user (created by the entrypoint at container start, UID unknown
 # at build time — see above) needs to write here: bootstrap.sh installs vLLM

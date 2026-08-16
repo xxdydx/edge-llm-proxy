@@ -46,6 +46,35 @@ HOP_BY_HOP = {
 # Re-emitting these would contradict the body we actually send back.
 RESPONSE_STRIP = {"content-length", "content-encoding", "transfer-encoding", "connection"}
 
+LOCAL_TEMPERATURE = 0
+
+
+def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any, int]:
+    """Make local sampling deterministic and opt client tools into constraints.
+
+    vLLM only enables schema-constrained decoding for automatic tool choice when
+    at least one tool declares ``strict: true``.  Claude Code does not currently
+    send that opt-in, so add it at the edge boundary.  Server-side tools never
+    reach this function because the router sends them to cloud.
+
+    Returns the original temperature and the number of tools changed so both
+    rewrites are visible in the trace.
+    """
+    original_temperature = request_json.get("temperature")
+    request_json["temperature"] = LOCAL_TEMPERATURE
+
+    strict_tools_added = 0
+    for tool in request_json.get("tools") or []:
+        if (
+            isinstance(tool, dict)
+            and isinstance(tool.get("input_schema"), dict)
+            and tool.get("strict") is not True
+        ):
+            tool["strict"] = True
+            strict_tools_added += 1
+
+    return original_temperature, strict_tools_added
+
 
 def _usage_of(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict) and isinstance(payload.get("usage"), dict):
@@ -67,6 +96,11 @@ def make_app(cfg: Config) -> FastAPI:
         preset=cfg.link_preset,
     )
     monitor = LinkMonitor()
+
+    # Last-seen wall clock per Claude Code session, so a call knows how long the
+    # gap was. Sessions are few and short-lived; leaking a handful of float
+    # entries is cheaper than expiring them.
+    last_seen: dict[str, float] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -123,16 +157,29 @@ def make_app(cfg: Config) -> FastAPI:
         detail: str | None = None
         clamped_to: int | None = None
         original_model: str | None = None
+        original_temperature: Any = None
+        strict_tools_added = 0
         feature_dict: dict[str, Any] | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
-                features = router.extract_features(request_json)
+                session = request.headers.get("x-claude-code-session-id")
+                gap = None
+                if session:
+                    now = time.time()
+                    prev = last_seen.get(session)
+                    gap = round(now - prev, 1) if prev is not None else None
+                    last_seen[session] = now
+                features = router.extract_features(request_json, gap)
                 feature_dict = asdict(features)
                 decision = policy.decide(features)
                 placement, reason, detail = decision.placement, decision.reason, decision.detail
 
                 # Local-only rewrites; cloud gets the request exactly as sent.
                 if placement == "local":
+                    original_temperature, strict_tools_added = (
+                        _apply_local_generation_controls(request_json)
+                    )
+
                     if request_json.get("model") != cfg.local_model_name:
                         original_model = request_json.get("model")
                         request_json["model"] = cfg.local_model_name
@@ -143,8 +190,10 @@ def make_app(cfg: Config) -> FastAPI:
                             request_json["max_tokens"] = want
                             clamped_to = want
 
-                    if original_model is not None or clamped_to is not None:
-                        body = json.dumps(request_json).encode()
+                    # Always re-serialise: temperature and strict-tool controls
+                    # are local-only rewrites even when model/token limits were
+                    # already in their desired form.
+                    body = json.dumps(request_json).encode()
             except Exception:
                 log.exception("router failed — falling back to cloud")
                 placement = "cloud"
@@ -161,6 +210,8 @@ def make_app(cfg: Config) -> FastAPI:
             "policy": policy.name,
             "clamped_max_tokens": clamped_to,
             "original_model": original_model,
+            "original_temperature": original_temperature,
+            "strict_tools_added": strict_tools_added,
             "backend": cfg.backends[placement],
             "features": feature_dict,
             "headers": redact_headers(request.headers),

@@ -62,6 +62,18 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
 
+# Local agent calls should be deterministic.  The server-side generation
+# override supplies the default; edgeproxy also rewrites local requests because
+# an explicit client temperature takes precedence over a server default.
+VLLM_TEMPERATURE="${VLLM_TEMPERATURE:-0}"
+
+# Constrained tool decoding is available by default in current vLLM, but make
+# both halves explicit so a model/server upgrade cannot silently change them.
+# Requests using tool_choice=auto still need at least one tool with strict=true;
+# edgeproxy adds that field to every client tool on the local path.
+STRUCTURED_OUTPUT_BACKEND="${STRUCTURED_OUTPUT_BACKEND:-xgrammar}"
+export VLLM_ENFORCE_STRICT_TOOL_CALLING="${VLLM_ENFORCE_STRICT_TOOL_CALLING:-true}"
+
 # Spliced unquoted into the vLLM launch so it word-splits into separate flags.
 # The escape hatch when a backend misbehaves on this GPU, e.g.:
 #   VLLM_EXTRA_ARGS=--enforce-eager    skip torch.compile + CUDA graph capture
@@ -276,6 +288,8 @@ phase_serve() {
     --enable-prefix-caching \
     --enable-auto-tool-choice \
     --tool-call-parser "$TOOL_CALL_PARSER" \
+    --override-generation-config "{\"temperature\":$VLLM_TEMPERATURE}" \
+    --structured-outputs-config.backend "$STRUCTURED_OUTPUT_BACKEND" \
     $VLLM_EXTRA_ARGS \
     > "$LOG_DIR/vllm.log" 2>&1 &
   local vllm_pid=$!

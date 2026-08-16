@@ -32,6 +32,11 @@ class CallFeatures:
     max_tokens: int
     stream: bool
     is_tool_continuation: bool
+    seconds_since_last_call: float | None = None
+    # TTL this request asked for, and how many breakpoints it set. Both are
+    # properties of the request body, so they are recoverable from any trace.
+    cloud_cache_ttl_s: float | None = None
+    n_cache_breakpoints: int = 0
 
 
 def _text_len(content: Any) -> int:
@@ -54,9 +59,67 @@ def _text_len(content: Any) -> int:
     return 0
 
 
-def extract_features(request: dict[str, Any]) -> CallFeatures:
+# Anthropic prompt caching. A breakpoint is `cache_control: {"type":
+# "ephemeral"}`, which lives 5 minutes; `{"ttl": "1h"}` lives an hour. Those are
+# the only two values, the 1h form is GA (no beta header), and the choice is
+# per-breakpoint — so the TTL of a call is read off the request, not assumed.
+# Claude Code sets no explicit ttl on any breakpoint in the recorded corpus,
+# which means the 5-minute default; other clients need not.
+CACHE_TTLS = {"5m": 300.0, "1h": 3600.0}
+DEFAULT_CACHE_TTL_S = 300.0
+
+
+def _breakpoint_ttls(request: dict[str, Any]) -> list[float]:
+    """Seconds-to-live of every cache_control breakpoint in the request."""
+    out: list[float] = []
+
+    def scan(obj: Any) -> None:
+        if isinstance(obj, dict):
+            cc = obj.get("cache_control")
+            if isinstance(cc, dict) and cc.get("type") == "ephemeral":
+                out.append(CACHE_TTLS.get(cc.get("ttl"), DEFAULT_CACHE_TTL_S))
+            for value in obj.values():
+                scan(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                scan(value)
+
+    # Render order, which is also the order breakpoints appear in the prefix.
+    for key in ("tools", "system", "messages"):
+        scan(request.get(key))
+
+    # Top-level cache_control is the auto-caching shorthand: one breakpoint on
+    # the last cacheable block. It is a sibling of `messages`, so scanning the
+    # three keys above would miss it.
+    top = request.get("cache_control")
+    if isinstance(top, dict) and top.get("type") == "ephemeral":
+        out.append(CACHE_TTLS.get(top.get("ttl"), DEFAULT_CACHE_TTL_S))
+
+    return out
+
+
+def cloud_cache_ttl_s(request: dict[str, Any]) -> float | None:
+    """How long this request's cloud-side prefix stays warm, in seconds.
+
+    `None` when the request sets no breakpoints at all — nothing is cached, so
+    there is no gap after which it goes cold.
+    """
+    ttls = _breakpoint_ttls(request)
+    if not ttls:
+        return None
+    # Breakpoints nest: each caches the whole span from the start of the prompt
+    # to its own position, as one entry that stands alone. Entries expire
+    # independently, so the deepest one still alive is what gets reused and the
+    # prefix is fully cold only once the longest-lived breakpoint expires.
+    return max(ttls)
+
+
+def extract_features(
+    request: dict[str, Any], seconds_since_last_call: float | None = None
+) -> CallFeatures:
     messages = request.get("messages") or []
     tools = request.get("tools") or []
+    ttls = _breakpoint_ttls(request)
 
     system_chars = _text_len(request.get("system"))
     body_chars = sum(_text_len(m.get("content")) for m in messages if isinstance(m, dict))
@@ -87,6 +150,9 @@ def extract_features(request: dict[str, Any]) -> CallFeatures:
         max_tokens=int(request.get("max_tokens") or 0),
         stream=bool(request.get("stream")),
         is_tool_continuation=is_continuation,
+        seconds_since_last_call=seconds_since_last_call,
+        cloud_cache_ttl_s=max(ttls) if ttls else None,
+        n_cache_breakpoints=len(ttls),
     )
 
 

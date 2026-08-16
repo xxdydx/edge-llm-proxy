@@ -13,7 +13,7 @@ spec:
   # is no tag indirection and no chance of a worker serving a cached older build
   # under the same name. Update this whenever the image is rebuilt.
   # Built from commit d4f1f6f — linux/amd64, includes build-essential for Triton.
-  image: ghcr.io/xxdydx/edge-llm-dev@sha256:76dcb3f8fbe8e372a0f0d2588f66a1fae9d12986925622229da09bd3c67b3060
+  image: ghcr.io/xxdydx/edge-llm-dev@sha256:9bb2be290e5ba0a983af845da39a2651f237901a874ad38eafa74fc2e080b04b
   authorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
   resources:

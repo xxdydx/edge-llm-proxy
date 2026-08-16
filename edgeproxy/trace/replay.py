@@ -29,12 +29,35 @@ def calls(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def features_for(record: dict[str, Any], use_recorded: bool) -> router.CallFeatures:
+def session_gaps(records: list[dict[str, Any]]) -> list[float | None]:
+    """Seconds since the previous call in the same session.
+
+    The live proxy tracks this in memory; offline it has to be reconstructed
+    from `ts` and the session header, or replayed features would differ from
+    recorded ones and the confusion matrix would report spurious mismatches.
+    """
+    last: dict[str, float] = {}
+    out: list[float | None] = []
+    for r in sorted(records, key=lambda x: x.get("ts") or 0):
+        sid = (r.get("headers") or {}).get("x-claude-code-session-id")
+        ts = r.get("ts")
+        if not sid or ts is None:
+            out.append(None)
+            continue
+        prev = last.get(sid)
+        out.append(round(ts - prev, 1) if prev is not None else None)
+        last[sid] = ts
+    return out
+
+
+def features_for(
+    record: dict[str, Any], use_recorded: bool, gap: float | None = None
+) -> router.CallFeatures:
     """Recompute by default: older records predate the `features` field, and
     recomputing keeps every policy on identical footing."""
     if use_recorded and isinstance(record.get("features"), dict):
         return router.CallFeatures(**record["features"])
-    return router.extract_features(record["request"])
+    return router.extract_features(record["request"], gap)
 
 
 def build_policy(name: str, cap: int, clamp: int | None, tools: bool) -> router.Policy:
@@ -132,8 +155,33 @@ def main() -> None:
     records = calls(load(existing))
     if not records:
         raise SystemExit("no /v1/messages records with a recorded request body")
-    feats = [features_for(r, args.use_recorded_features) for r in records]
+    records.sort(key=lambda r: r.get("ts") or 0)
+    gaps = session_gaps(records)
+    feats = [
+        features_for(r, args.use_recorded_features, g) for r, g in zip(records, gaps)
+    ]
     print(f"{len(records)} calls from {len(existing)} file(s)")
+
+    # TTL is per-request, so each call is compared against its own, not a
+    # global constant.
+    warm = cold = first = uncached = 0
+    for f in feats:
+        if f.cloud_cache_ttl_s is None:
+            uncached += 1
+        elif f.seconds_since_last_call is None:
+            first += 1
+        elif f.seconds_since_last_call <= f.cloud_cache_ttl_s:
+            warm += 1
+        else:
+            cold += 1
+    print(
+        f"  cloud cache: {warm} within TTL, {cold} past TTL, "
+        f"{first} first-in-session, {uncached} no breakpoints"
+    )
+    ttls = Counter(f.cloud_cache_ttl_s for f in feats if f.cloud_cache_ttl_s)
+    if ttls:
+        spread = ", ".join(f"{int(t)}s x{c}" for t, c in sorted(ttls.items()))
+        print(f"    TTLs requested: {spread}")
 
     clamp = None if args.clamp == "off" else int(args.clamp)
     tools = args.tools == "on"
