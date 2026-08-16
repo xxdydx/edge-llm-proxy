@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .shaping import PRESETS, LinkShaper
+
 # Traffic goes through the Lumid pool rather than api.anthropic.com directly.
 DEFAULT_UPSTREAM = "https://lum.id/claude"
 
@@ -19,6 +21,11 @@ class Config:
     trace_dir: Path
     vllm_url: str
     policy: str
+    shaping: str        # proxy | netem | none — recorded, so a latency figure
+    link_preset: str    # is never ambiguous about whether it was shaped
+    cloud_delay_ms: float
+    cloud_jitter_ms: float
+    cloud_bandwidth_mbps: float
     # vLLM rejects any model name it does not serve, and the harness asks for
     # real Claude names. Local-routed requests get rewritten to this.
     local_model_name: str
@@ -50,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     p.add_argument(
         "--policy",
-        default=env("EDGEPROXY_POLICY", "cloud-only"),
+        default=env("EDGEPROXY_POLICY", "static"),
         help="placement policy: cloud-only | local-only | static",
     )
     p.add_argument(
@@ -58,7 +65,28 @@ def parse_args(argv: list[str] | None = None) -> Config:
         default=env("EDGEPROXY_LOCAL_MODEL_NAME", "local"),
         help="what vLLM is served as; local-routed requests are rewritten to it",
     )
+    p.add_argument(
+        "--shaping",
+        default=env("EDGEPROXY_SHAPING", "proxy"),
+        choices=["proxy", "netem", "none"],
+        help="where cloud-path shaping happens; netem means it is applied "
+        "outside this process and we only record that",
+    )
+    p.add_argument(
+        "--link-preset",
+        default=env("EDGEPROXY_LINK_PRESET", "none"),
+        help=f"named scenario: {', '.join(PRESETS)}",
+    )
+    p.add_argument("--cloud-delay-ms", type=float, default=None, help="overrides preset")
+    p.add_argument("--cloud-jitter-ms", type=float, default=None, help="overrides preset")
+    p.add_argument("--cloud-bandwidth-mbps", type=float, default=None, help="overrides preset")
     a = p.parse_args(argv)
+
+    # Preset supplies the defaults; the explicit flags win where given.
+    base = LinkShaper.from_preset(a.link_preset)
+    delay = base.delay_ms if a.cloud_delay_ms is None else a.cloud_delay_ms
+    jitter = base.jitter_ms if a.cloud_jitter_ms is None else a.cloud_jitter_ms
+    mbps = base.bandwidth_mbps if a.cloud_bandwidth_mbps is None else a.cloud_bandwidth_mbps
 
     return Config(
         host=a.host,
@@ -68,4 +96,9 @@ def parse_args(argv: list[str] | None = None) -> Config:
         vllm_url=a.vllm_url,
         policy=a.policy,
         local_model_name=a.local_model_name,
+        shaping=a.shaping,
+        link_preset=a.link_preset,
+        cloud_delay_ms=delay,
+        cloud_jitter_ms=jitter,
+        cloud_bandwidth_mbps=mbps,
     )

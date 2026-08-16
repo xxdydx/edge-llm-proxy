@@ -22,6 +22,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .config import Config, parse_args
 from . import router
+from .shaping import LinkMonitor, LinkShaper
+from .timing import make_trace_extension
 from .trace.record import TraceWriter, parse_sse, reassemble, redact_headers
 
 log = logging.getLogger("edgeproxy")
@@ -55,6 +57,16 @@ def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
 
     policy = router.build(cfg.policy)
+
+    # `netem` means shaping happens outside this process; we record the claim
+    # but must not also apply it, or the delay would be counted twice.
+    shaper = LinkShaper(
+        delay_ms=cfg.cloud_delay_ms if cfg.shaping == "proxy" else 0.0,
+        jitter_ms=cfg.cloud_jitter_ms if cfg.shaping == "proxy" else 0.0,
+        bandwidth_mbps=cfg.cloud_bandwidth_mbps if cfg.shaping == "proxy" else 0.0,
+        preset=cfg.link_preset,
+    )
+    monitor = LinkMonitor()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -156,13 +168,18 @@ def make_app(cfg: Config) -> FastAPI:
         }
 
         client: httpx.AsyncClient = request.app.state.clients[placement]
+        trace_ext, read_timing = make_trace_extension()
         upstream_request = client.build_request(
             request.method,
             "/" + path,
             content=body,
             headers=headers,
             params=request.query_params,
+            extensions=trace_ext,
         )
+
+        # Uplink cost, cloud only. Local is loopback and gets nothing.
+        shaped_ms = await shaper.apply(len(body)) if placement == "cloud" else 0.0
 
         try:
             upstream = await client.send(upstream_request, stream=streaming)
@@ -187,6 +204,19 @@ def make_app(cfg: Config) -> FastAPI:
         }
         record["status"] = upstream.status_code
 
+        # send() has returned, so response headers are in and the phase stamps
+        # are complete. The body has not been read yet.
+        conn = read_timing()
+        net_ms = conn.network_ms
+        if placement == "cloud":
+            monitor.observe(net_ms)
+        record["link"] = {
+            "shaping": cfg.shaping,
+            **shaper.as_dict(),
+            "shaped_ms": shaped_ms or None,
+            **monitor.as_dict(),
+        }
+
         if not streaming:
             payload = await upstream.aread()
             await upstream.aclose()
@@ -197,7 +227,11 @@ def make_app(cfg: Config) -> FastAPI:
             record |= {
                 "response": parsed,
                 "usage": _usage_of(parsed),
-                "timing": {"total_ms": round((time.monotonic() - started) * 1000, 1)},
+                "timing": {
+                    "total_ms": round((time.monotonic() - started) * 1000, 1),
+                    "network_ms": net_ms,
+                    **conn.as_dict(),
+                },
             }
             writer.write(record)
             return Response(
@@ -234,6 +268,15 @@ def make_app(cfg: Config) -> FastAPI:
                         "timing": {
                             "ttft_ms": ttft_ms,
                             "total_ms": round((time.monotonic() - started) * 1000, 1),
+                            "network_ms": net_ms,
+                            # Queueing + prefill, with the link taken out. This
+                            # is the term a cost model gets fitted against.
+                            "server_ttft_ms": (
+                                round(ttft_ms - net_ms, 1)
+                                if ttft_ms is not None and net_ms is not None
+                                else None
+                            ),
+                            **conn.as_dict(),
                         },
                     })
                 except Exception:
