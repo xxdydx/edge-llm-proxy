@@ -62,8 +62,17 @@ flowmesh ssh connect "$TASK_ID" </dev/null >"$CONNECT_LOG" 2>&1 &
 CONNECT_PID=$!
 
 log "waiting for SSH session to come up (this can take a couple minutes)"
+# A task that never gets scheduled ("No worker satisfies the task hardware and
+# capability requirements") fails in milliseconds and looks identical, from the
+# connect log alone, to one that is still starting. Poll the task's own status
+# so a terminal state ends the wait instead of burning the full 10 minutes.
 for _ in $(seq 1 120); do
   grep -q '^Connecting:' "$CONNECT_LOG" && break
+  st="$(flowmesh task info "$TASK_ID" 2>/dev/null | grep -m1 '"status"' | cut -d'"' -f4)"
+  case "$st" in
+    FAILED|CANCELLED|DONE)
+      die "task ended early ($st): $(flowmesh task info "$TASK_ID" | grep -m1 '"error"')" ;;
+  esac
   sleep 5
 done
 kill "$CONNECT_PID" 2>/dev/null || true

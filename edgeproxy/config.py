@@ -29,6 +29,9 @@ class Config:
     # vLLM rejects any model name it does not serve, and the harness asks for
     # real Claude names. Local-routed requests get rewritten to this.
     local_model_name: str
+    resource_sample_interval_s: float
+    gpu_index: int
+    kv_bytes_per_token: int | None
 
     @property
     def backends(self) -> dict[str, str]:
@@ -66,6 +69,28 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="what vLLM is served as; local-routed requests are rewritten to it",
     )
     p.add_argument(
+        "--resource-sample-interval-s",
+        type=float,
+        default=float(env("EDGEPROXY_RESOURCE_SAMPLE_INTERVAL_S", "1")),
+        help="seconds between cached GPU, RAM, and vLLM metric samples",
+    )
+    p.add_argument(
+        "--gpu-index",
+        type=int,
+        default=int(env("EDGEPROXY_GPU_INDEX", "0")),
+        help="NVML GPU index used by the local vLLM server",
+    )
+    p.add_argument(
+        "--kv-bytes-per-token",
+        type=int,
+        default=(
+            int(env("EDGEPROXY_KV_BYTES_PER_TOKEN"))
+            if env("EDGEPROXY_KV_BYTES_PER_TOKEN")
+            else None
+        ),
+        help="model KV bytes/token, used to estimate occupied KV-cache GiB",
+    )
+    p.add_argument(
         "--shaping",
         default=env("EDGEPROXY_SHAPING", "proxy"),
         choices=["proxy", "netem", "none"],
@@ -101,4 +126,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         cloud_delay_ms=delay,
         cloud_jitter_ms=jitter,
         cloud_bandwidth_mbps=mbps,
+        resource_sample_interval_s=max(a.resource_sample_interval_s, 0.1),
+        gpu_index=a.gpu_index,
+        kv_bytes_per_token=a.kv_bytes_per_token,
     )

@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .config import Config, parse_args
 from . import router
 from .shaping import LinkMonitor, LinkShaper
+from .telemetry import LocalResourceSampler
 from .timing import make_trace_extension
 from .trace.record import TraceWriter, parse_sse, reassemble, redact_headers
 
@@ -116,6 +117,13 @@ def make_app(cfg: Config) -> FastAPI:
             )
             for name, url in cfg.backends.items()
         }
+        app.state.resource_sampler = LocalResourceSampler(
+            app.state.clients["local"],
+            interval_s=cfg.resource_sample_interval_s,
+            gpu_index=cfg.gpu_index,
+            kv_bytes_per_token=cfg.kv_bytes_per_token,
+        )
+        app.state.resource_sampler.start()
         log.info(
             "policy=%s cloud=%s local=%s traces=%s",
             policy.name, cfg.upstream, cfg.vllm_url, cfg.trace_dir,
@@ -123,6 +131,7 @@ def make_app(cfg: Config) -> FastAPI:
         try:
             yield
         finally:
+            await app.state.resource_sampler.close()
             for client in app.state.clients.values():
                 await client.aclose()
 
@@ -217,6 +226,8 @@ def make_app(cfg: Config) -> FastAPI:
             "headers": redact_headers(request.headers),
             "request": request_json,
         }
+        if placement == "local":
+            record["local_resources"] = request.app.state.resource_sampler.snapshot()
 
         client: httpx.AsyncClient = request.app.state.clients[placement]
         trace_ext, read_timing = make_trace_extension()

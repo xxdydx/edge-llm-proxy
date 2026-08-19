@@ -298,6 +298,45 @@ phase_serve() {
   wait_for_http "http://localhost:$VLLM_PORT/health" vLLM 600 \
     "$vllm_pid" "$LOG_DIR/vllm.log"
 
+  # Convert vLLM's token-level KV occupancy into an estimated GiB figure in
+  # proxy traces. This is derived rather than hard-coded so changing MODEL or
+  # KV_CACHE_DTYPE keeps the estimate honest. An explicit environment value
+  # remains available for architectures that do not expose standard attention
+  # fields in their Hugging Face config.
+  local kv_bytes_per_token="${EDGEPROXY_KV_BYTES_PER_TOKEN:-}"
+  if [ -z "$kv_bytes_per_token" ]; then
+    kv_bytes_per_token=$("$VENV/bin/python" - "$MODEL" "$KV_CACHE_DTYPE" <<'PY'
+import sys
+from transformers import AutoConfig
+
+model, cache_dtype = sys.argv[1:]
+config = AutoConfig.from_pretrained(model, local_files_only=True)
+
+layers = getattr(config, "num_hidden_layers")
+kv_heads = getattr(config, "num_key_value_heads", getattr(config, "num_attention_heads"))
+head_dim = getattr(
+    config,
+    "head_dim",
+    getattr(config, "hidden_size") // getattr(config, "num_attention_heads"),
+)
+
+if cache_dtype.lower().startswith("fp8"):
+    dtype_bytes = 1
+else:
+    model_dtype = str(getattr(config, "torch_dtype", "float16")).lower()
+    dtype_bytes = 4 if "float32" in model_dtype else 2
+
+# Key + value tensors, for every layer and KV head.
+print(2 * layers * kv_heads * head_dim * dtype_bytes)
+PY
+    ) || warn "could not derive KV bytes/token; KV GiB trace fields will be null"
+  fi
+  local proxy_resource_args=()
+  if [ -n "$kv_bytes_per_token" ]; then
+    proxy_resource_args=(--kv-bytes-per-token "$kv_bytes_per_token")
+    log "KV telemetry: $kv_bytes_per_token bytes/token"
+  fi
+
   # Provenance for the results directory — KV capacity in blocks is the number
   # every prefix-cache and cohort experiment gets normalised against.
   local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -322,6 +361,7 @@ phase_serve() {
       --port "$PROXY_PORT" \
       --trace-dir "${EDGEPROXY_TRACE_DIR:-$REPO_DIR/traces}" \
       --vllm-url "http://localhost:$VLLM_PORT" \
+      "${proxy_resource_args[@]}" \
       > "$LOG_DIR/proxy.log" 2>&1 &
     local proxy_pid=$!
     echo "$proxy_pid" > "$LOG_DIR/proxy.pid"
