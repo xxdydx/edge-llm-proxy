@@ -12,8 +12,9 @@ file.
 
 ```
 1. claude-memory/wiki/overview.md   — what this project is
-2. claude-memory/wiki/hot.md        — where it stands right now
-3. claude-memory/wiki/index.md      — what exists and where
+2. claude-memory/wiki/summary.md    — canonical one-page direction and status
+3. claude-memory/wiki/hot.md        — detailed current blockers and loose ends
+4. claude-memory/wiki/index.md      — what exists and where
 ```
 
 Then follow `[[links]]` on demand. Read `PLAN.md` (research plan) and
@@ -31,6 +32,11 @@ Short version: when you measure something, debug something, decide something, or
 hit something unanswerable — write it **then**, not at the end of the session.
 Every leaf note declares a `topic:` and gets linked from that topic's hub and
 from `index.md`.
+
+`claude-memory/wiki/summary.md` is the canonical supervisor briefing and **must
+always remain current**. Any change to direction, architecture, meaningful
+capability, headline evidence/caveats, blockers, priorities, or projected work
+must update the relevant summary section in the same change.
 
 `claude-memory/` is a plain directory of Markdown files with YAML frontmatter.
 No tooling is required to read or write it.

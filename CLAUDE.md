@@ -8,8 +8,9 @@ and everything need to do.
 
 ```
 1. claude-memory/wiki/overview.md   — what this project is
-2. claude-memory/wiki/hot.md        — where it stands right now
-3. claude-memory/wiki/index.md      — what exists and where
+2. claude-memory/wiki/summary.md    — canonical one-page direction and status
+3. claude-memory/wiki/hot.md        — detailed current blockers and loose ends
+4. claude-memory/wiki/index.md      — what exists and where
 ```
 
 Then follow `[[links]]` on demand. Read `PLAN.md` (research plan) and
@@ -28,6 +29,11 @@ The short version: when you measure something, debug something, decide
 something, or hit something unanswerable — write it **then**, not at the end of
 the session. Every leaf note declares a `topic:` and gets linked from that
 topic's hub and from `index.md`.
+
+`claude-memory/wiki/summary.md` is the canonical supervisor briefing and must
+always be updated in the same change whenever direction, architecture,
+meaningful capability, headline evidence/caveats, blockers, priorities, or
+projected work changes.
 
 `AGENTS.md` points at the same protocol so Claude Code and Codex stay in sync.
 Change `PROTOCOL.md`, not this file.
