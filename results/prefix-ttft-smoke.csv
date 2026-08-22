@@ -1,0 +1,5 @@
+timestamp_utc,vllm_version,model,tokenizer,kv_cache_dtype,num_gpu_blocks,kv_cache_size_tokens,match_unit,total_tokens,prefix_fraction,intended_cached_tokens,actual_queried_tokens,actual_cached_tokens,repetition,ttft_ms,response_headers_ms,valid_hit
+2026-08-20T14:17:48.461871+00:00,0.27.1,local,Qwen/Qwen2.5-7B-Instruct-AWQ,auto,9181,146896,16,4096,0.0,0,4096,0,0,601.861,8.529,True
+2026-08-20T14:17:49.153526+00:00,0.27.1,local,Qwen/Qwen2.5-7B-Instruct-AWQ,auto,9181,146896,16,4096,1.0,4096,4096,4080,0,45.146,8.504,True
+2026-08-20T14:17:49.384329+00:00,0.27.1,local,Qwen/Qwen2.5-7B-Instruct-AWQ,auto,9181,146896,16,1024,1.0,1024,1024,1008,0,31.387,5.696,True
+2026-08-20T14:17:49.739416+00:00,0.27.1,local,Qwen/Qwen2.5-7B-Instruct-AWQ,auto,9181,146896,16,1024,0.0,0,1024,0,0,155.154,5.543,True

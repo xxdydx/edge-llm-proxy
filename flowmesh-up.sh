@@ -68,7 +68,11 @@ log "waiting for SSH session to come up (this can take a couple minutes)"
 # so a terminal state ends the wait instead of burning the full 10 minutes.
 for _ in $(seq 1 120); do
   grep -q '^Connecting:' "$CONNECT_LOG" && break
-  st="$(flowmesh task info "$TASK_ID" 2>/dev/null | grep -m1 '"status"' | cut -d'"' -f4)"
+  # `|| st=""` matters here: under `set -e -o pipefail`, a single transient
+  # failure of `flowmesh task info` (network blip, brief rate limit) would
+  # otherwise kill the whole script with no message, even though the task
+  # itself is fine. Treat a failed fetch as "no status yet" and retry.
+  st="$(flowmesh task info "$TASK_ID" 2>/dev/null | grep -m1 '"status"' | cut -d'"' -f4)" || st=""
   case "$st" in
     FAILED|CANCELLED|DONE)
       die "task ended early ($st): $(flowmesh task info "$TASK_ID" | grep -m1 '"error"')" ;;
@@ -82,16 +86,35 @@ SSH_LINE="$(grep '^Connecting:' "$CONNECT_LOG" | sed 's/^Connecting: //')"
 [ -n "$SSH_LINE" ] || die "session never became ready — see $CONNECT_LOG"
 rm -f "$CONNECT_LOG"
 
-SSH_PORT="$(echo "$SSH_LINE" | grep -oE -- '-p [0-9]+' | awk '{print $2}')"
-SSH_TARGET="$(echo "$SSH_LINE" | grep -oE '[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$')"
-[ -n "$SSH_PORT" ] && [ -n "$SSH_TARGET" ] || die "couldn't parse host/port from: $SSH_LINE"
-log "ssh target: $SSH_TARGET:$SSH_PORT"
-
-# `-o Port=` rather than a bare port flag: ssh spells it -p and scp spells it
-# -P (lowercase -p means "preserve mtimes" to scp, and takes no argument), so a
-# shared array can only work via the config-style option both accept.
-SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-          -o LogLevel=ERROR -o "Port=$SSH_PORT")
+# Shape depends on accessMode. `forward`/`direct` prints a literal `-p PORT`
+# plus a reachable host:port. `proxy` prints `-o ProxyCommand=flowmesh ssh
+# proxy <task-id> ...` instead: no port, and the ProxyCommand value itself
+# contains spaces with no quoting in the printed line, so this can't be
+# whitespace-split like a normal argv (that would chop "flowmesh ssh proxy
+# <task-id>" into separate bogus tokens). We don't need to: for proxy mode the
+# ProxyCommand is always exactly "flowmesh ssh proxy $TASK_ID" and the host is
+# always literally $TASK_ID, both of which we already have as variables — so
+# detect the mode and build the option list directly instead of parsing it out
+# of the text.
+if echo "$SSH_LINE" | grep -q 'ProxyCommand='; then
+  SSH_MODE=proxy
+  SSH_TARGET="$(echo "$SSH_LINE" | grep -oE "[A-Za-z0-9_.-]+@${TASK_ID}\$")"
+  [ -n "$SSH_TARGET" ] || die "couldn't parse ssh target from: $SSH_LINE"
+  SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR -o "ProxyCommand=flowmesh ssh proxy $TASK_ID")
+  log "ssh target: $SSH_TARGET (proxy)"
+else
+  SSH_MODE=direct
+  SSH_PORT="$(echo "$SSH_LINE" | grep -oE -- '-p [0-9]+' | awk '{print $2}')"
+  SSH_TARGET="$(echo "$SSH_LINE" | grep -oE '[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$')"
+  [ -n "$SSH_PORT" ] && [ -n "$SSH_TARGET" ] || die "couldn't parse host/port from: $SSH_LINE"
+  # `-o Port=` rather than a bare port flag: ssh spells it -p and scp spells it
+  # -P (lowercase -p means "preserve mtimes" to scp, and takes no argument), so a
+  # shared array can only work via the config-style option both accept.
+  SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR -o "Port=$SSH_PORT")
+  log "ssh target: $SSH_TARGET:$SSH_PORT"
+fi
 
 ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$@"; }
 
@@ -109,18 +132,24 @@ update_ssh_config() {
     $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }
   ' "$cfg" > "$cfg.tmp"
 
-  cat >> "$cfg.tmp" <<EOF
-$begin
-Host fmbox
-    HostName ${SSH_TARGET#*@}
-    User ${SSH_TARGET%@*}
-    Port $SSH_PORT
+  {
+    echo "$begin"
+    echo "Host fmbox"
+    echo "    HostName ${SSH_TARGET#*@}"
+    echo "    User ${SSH_TARGET%@*}"
+    if [ "$SSH_MODE" = proxy ]; then
+      echo "    ProxyCommand flowmesh ssh proxy $TASK_ID"
+    else
+      echo "    Port $SSH_PORT"
+    fi
+    cat <<EOF
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     LogLevel ERROR
     ServerAliveInterval 30
 $end
 EOF
+  } >> "$cfg.tmp"
 
   mv "$cfg.tmp" "$cfg"; chmod 600 "$cfg"
   log "ssh alias 'fmbox' written to $cfg"

@@ -24,7 +24,7 @@ spec:
       cpu: 8
       memory: 32Gi
   ttlSeconds: 28800
-  accessMode: forward
+  accessMode: proxy
   output:
     destination:
       type: http

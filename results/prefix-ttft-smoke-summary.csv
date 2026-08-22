@@ -1,0 +1,5 @@
+total_tokens,intended_cached_tokens,cached_fraction,median_ttft_ms,p10_ttft_ms,p90_ttft_ms,saved_vs_cold_ms,valid_samples,total_samples
+1024,0,0.0,155.154,155.154,155.154,0.0,1,1
+1024,1024,1.0,31.387,31.387,31.387,123.767,1,1
+4096,0,0.0,601.861,601.861,601.861,0.0,1,1
+4096,4096,1.0,45.146,45.146,45.146,556.715,1,1

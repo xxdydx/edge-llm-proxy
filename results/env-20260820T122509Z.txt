@@ -1,0 +1,6 @@
+timestamp    20260820T122509Z
+model        Qwen/Qwen2.5-7B-Instruct-AWQ
+max_model_len 32768  gpu_mem_util 0.90  kv_dtype auto
+NVIDIA GeForce RTX 5080, 16303 MiB, 595.84, 12.0
+(EngineCore pid=1952) INFO 08-20 12:22:02 [kv_cache_utils.py:2235] GPU KV cache size: 115,872 tokens
+(EngineCore pid=1952) INFO 08-20 12:24:41 [model_runner.py:791] Graph capturing finished in 159 secs, took 0.38 GiB

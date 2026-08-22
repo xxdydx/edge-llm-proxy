@@ -82,6 +82,24 @@ def cache_config(text: str) -> dict[str, str]:
     return {}
 
 
+def detect_match_unit(config: dict[str, str]) -> int | None:
+    """Return the first positive cache match unit reported by vLLM.
+
+    Some vLLM versions expose ``prefix_match_unit="None"`` alongside a valid
+    ``block_size``.  Treat non-numeric sentinel values as absent so detection
+    falls through to the block size instead of failing during integer parsing.
+    """
+    for key in ("prefix_match_unit", "block_size"):
+        raw = config.get(key)
+        try:
+            value = int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            continue
+        if value is not None and value > 0:
+            return value
+    return None
+
+
 def cache_counters(client: httpx.Client) -> tuple[float, float, str]:
     response = client.get("/metrics")
     response.raise_for_status()
@@ -275,8 +293,7 @@ def main() -> int:
     with httpx.Client(base_url=args.base_url.rstrip("/"), timeout=args.timeout) as client:
         _, _, metrics_text = cache_counters(client)
         config = cache_config(metrics_text)
-        detected = config.get("prefix_match_unit") or config.get("block_size")
-        match_unit = args.match_unit or (int(detected) if detected else None)
+        match_unit = args.match_unit or detect_match_unit(config)
         if not match_unit or match_unit <= 0:
             raise SystemExit(
                 "could not detect prefix_match_unit/block_size from /metrics; "
