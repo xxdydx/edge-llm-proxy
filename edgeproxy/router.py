@@ -187,7 +187,7 @@ class StaticPolicy:
 
     def __init__(
         self,
-        max_local_tokens: int = 32_000,
+        max_local_tokens: int = 60_000,
         margin: float = 0.9,
         local_can_tool_call: bool = True,
         clamp_max_tokens: int | None = 4096,

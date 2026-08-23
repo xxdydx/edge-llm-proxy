@@ -58,7 +58,7 @@ TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 # for "claude-sonnet-5" et al, so those need to be aliases if you point the
 # harness straight at vLLM.
 SERVED_NAME="${SERVED_NAME:-local}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-60000}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
 
