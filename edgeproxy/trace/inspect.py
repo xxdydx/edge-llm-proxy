@@ -17,6 +17,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .record import build_token_accounting
+
 
 def load(paths: list[Path]) -> list[dict[str, Any]]:
     records = []
@@ -62,6 +64,48 @@ def _pct(values: list[float], q: float) -> float:
     return ordered[min(int(q * len(ordered)), len(ordered) - 1)]
 
 
+def usage_input_breakdown(usage: Any) -> dict[str, int | bool]:
+    """Normalise old and cache-detailed Anthropic usage schemas.
+
+    With prompt-token details enabled, ``input_tokens`` is the uncached
+    remainder and total input also includes cache reads and cache creation.
+    Historical records without either cache field use ``input_tokens`` as the
+    only recoverable total and must not be counted as observed cache misses.
+    """
+    accounting = build_token_accounting(usage)
+    detailed = bool(accounting["cache_details_available"])
+    uncached = int(accounting["uncached_input_tokens"] or 0)
+    cached = int(accounting["cache_read_input_tokens"] or 0)
+    created = int(accounting["cache_creation_input_tokens"] or 0)
+    total = int(accounting["input_tokens"] or 0)
+    return {
+        "detailed": detailed,
+        "uncached": uncached,
+        "cached": cached,
+        "created": created,
+        "total": total,
+    }
+
+
+def cache_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Aggregate only records whose provider reported cache detail fields."""
+    by_placement: dict[str, dict[str, int]] = {}
+    for record in records:
+        usage = usage_input_breakdown(record.get("usage"))
+        if not usage["detailed"]:
+            continue
+        placement = str(record.get("placement") or "unknown")
+        stats = by_placement.setdefault(
+            placement,
+            {"requests": 0, "request_hits": 0, "cached": 0, "total": 0},
+        )
+        stats["requests"] += 1
+        stats["request_hits"] += int(usage["cached"] > 0)
+        stats["cached"] += int(usage["cached"])
+        stats["total"] += int(usage["total"])
+    return by_placement
+
+
 def summarise(records: list[dict[str, Any]]) -> None:
     print(f"records            {len(records)}")
     if not records:
@@ -96,19 +140,38 @@ def summarise(records: list[dict[str, Any]]) -> None:
         f"  |  {len(messages) - len(with_tools)} without (sidecall candidates)"
     )
 
-    inp = [r.get("usage", {}).get("input_tokens", 0) or 0 for r in messages]
+    input_usage = [usage_input_breakdown(r.get("usage")) for r in messages]
+    inp = [int(usage["total"]) for usage in input_usage]
     out = [r.get("usage", {}).get("output_tokens", 0) or 0 for r in messages]
-    cached = [r.get("usage", {}).get("cache_read_input_tokens", 0) or 0 for r in messages]
-    created = [r.get("usage", {}).get("cache_creation_input_tokens", 0) or 0 for r in messages]
+    cached = [int(usage["cached"]) for usage in input_usage]
+    created = [int(usage["created"]) for usage in input_usage]
 
     print("\ntokens")
-    print(f"  input            {sum(inp):>10,}   median {statistics.median(inp):>8,.0f}")
+    print(f"  input_total      {sum(inp):>10,}   median {statistics.median(inp):>8,.0f}")
     print(f"  output           {sum(out):>10,}   median {statistics.median(out):>8,.0f}")
-    print(f"  cache_read       {sum(cached):>10,}")
-    print(f"  cache_creation   {sum(created):>10,}")
-    billable = sum(inp) + sum(cached)
-    if billable:
-        print(f"  prefix reuse     {sum(cached) / billable:>10.1%}  (cloud-side reference)")
+
+    stats_by_placement = cache_stats(messages)
+    if stats_by_placement:
+        print(f"  cache_read       {sum(cached):>10,}")
+        print(f"  cache_creation   {sum(created):>10,}")
+        print("\nreported prefix-cache reuse")
+        for placement in sorted(stats_by_placement):
+            stats = stats_by_placement[placement]
+            request_rate = stats["request_hits"] / stats["requests"]
+            token_rate = stats["cached"] / stats["total"] if stats["total"] else 0.0
+            print(
+                f"  {placement:<8} requests {stats['request_hits']:>5,}/{stats['requests']:<5,}"
+                f" ({request_rate:>6.1%})  tokens {stats['cached']:>10,}/{stats['total']:<10,}"
+                f" ({token_rate:>6.1%})"
+            )
+        detailed_count = sum(stats["requests"] for stats in stats_by_placement.values())
+        if detailed_count != len(messages):
+            print(
+                f"  note     {len(messages) - detailed_count:,} older/unsupported records "
+                "excluded (no cache-detail fields)"
+            )
+    else:
+        print("  cache detail     unavailable (no cache-detail fields)")
 
     ttfts = [
         r["timing"]["ttft_ms"]

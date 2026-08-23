@@ -195,6 +195,7 @@ Overridable via environment:
 | `MAX_MODEL_LEN` | `32768` |
 | `GPU_MEM_UTIL` | `0.90` |
 | `KV_CACHE_DTYPE` | `auto` (`fp8` roughly doubles KV capacity) |
+| `VLLM_SERVER_DEV_MODE` | `0`; set `1` only for cache-reset benchmarks |
 | `TOOL_CALL_PARSER` | `hermes` (model-specific) |
 | `VLLM_EXTRA_ARGS` | empty (`--enforce-eager` skips CUDA graphs) |
 | `VLLM_PORT` / `PROXY_PORT` | `8001` / `8000` |
@@ -222,6 +223,58 @@ Tool calling is off by default, and vLLM *rejects* any request carrying a
 parser is model-specific: `hermes` suits Qwen2.5, so change `TOOL_CALL_PARSER`
 if you change models.
 
+`bootstrap.sh` also enables `--enable-prompt-tokens-details`. On vLLM 0.27,
+the Anthropic response then reports exact post-request prefix-cache usage:
+
+```text
+usage.cache_read_input_tokens      tokens reused from the local KV cache
+usage.cache_creation_input_tokens  newly cached input tokens
+usage.input_tokens                 uncached input-token remainder
+```
+
+For these detailed responses, total input is:
+
+```text
+input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+```
+
+`edgeproxy` preserves these fields in each trace's top-level `usage` object.
+The trace inspector reports request-level hit rate and token-weighted reuse
+separately for local and cloud placements. Historical records without the
+detail fields remain readable, but are excluded from cache-hit-rate
+denominators rather than being misclassified as misses.
+
+Every new trace record—local or cloud—also carries the same normalized summary:
+
+```json
+"token_accounting": {
+  "input_tokens": 1200,
+  "output_tokens": 50,
+  "tokens_processed": 1250,
+  "cache_read_input_tokens": 800,
+  "cache_creation_input_tokens": 300,
+  "uncached_input_tokens": 100,
+  "cache_details_available": true
+}
+```
+
+Here `input_tokens` is always total input, unlike the provider's raw detailed
+`usage.input_tokens`, which is the uncached remainder. `tokens_processed` is
+logical token volume (`input_tokens + output_tokens`), not equal-cost GPU work:
+cache reads, fresh prefill, and autoregressive output have different costs. If
+a backend reports input/output usage but omits cache details, the totals remain
+populated while the three cache-breakdown fields are `null`. Failed calls with
+no provider usage also use `null`, keeping “unknown” distinct from measured
+zero.
+
+The background `local_resources.vllm` snapshot also includes vLLM's cumulative
+prefix-query/hit counters when the installed version exports them. Those
+counters are an audit signal only: they are lifetime, process-wide totals and
+cannot be assigned to one request under concurrency. The response `usage`
+fields are the authoritative per-request observation. Neither source predicts
+whether the incoming request will hit before it is routed; that still requires
+the planned shadow radix tracker or cache probe.
+
 Quick check against a running box:
 
 ```bash
@@ -229,6 +282,39 @@ curl -s localhost:8001/v1/messages -H 'content-type: application/json' \
   -d '{"model":"local","max_tokens":60,
        "messages":[{"role":"user","content":"Name three Python web frameworks."}]}'
 ```
+
+After deploying this version and deliberately restarting vLLM, validate the
+cache-detail path through `edgeproxy` with two byte-identical requests:
+
+```bash
+nonce="$(date +%s%N)"
+prompt="$nonce $(printf 'prefix-cache-validation %.0s' {1..256})"
+body="$(jq -nc --arg prompt "$prompt" \
+  '{model:"local",max_tokens:8,stream:true,
+    messages:[{role:"user",content:$prompt}]}')"
+
+for repetition in 1 2; do
+  curl -Ns http://127.0.0.1:8000/v1/messages \
+    -H 'content-type: application/json' \
+    --data "$body" >/dev/null
+done
+
+trace_file="$(ls -t traces/*.jsonl | head -1)"
+jq 'select(.path == "/v1/messages" and .placement == "local") |
+    {usage, prefix_counters: {
+      queries: .local_resources.vllm.prefix_cache_queries_total,
+      hits: .local_resources.vllm.prefix_cache_hits_total,
+      lifetime_fraction: .local_resources.vllm.prefix_cache_hit_fraction_lifetime
+    }}' "$trace_file" | tail -n 36
+```
+
+The second response should have positive—and substantially greater—
+`usage.cache_read_input_tokens` than the first. A small first-request hit is
+possible because the chat template itself may already be resident. The counter
+snapshot may lag by one sampling interval and is not expected to equal either
+individual request. Confirm the running command contains
+`--enable-prompt-tokens-details` if the usage fields are absent; setting a flag
+after vLLM has started cannot change that process.
 
 ### Local latency and throughput benchmark
 
@@ -264,6 +350,17 @@ TTFT and end-to-end latency, per-request post-first-token decode speed, aggregat
 batch throughput, realized cache fraction, and cache-state validity. A requested
 warm condition may be invalid under eviction pressure; the runner records the
 actual vLLM counter delta instead of assuming a hit.
+
+The benchmark requires vLLM's cache-reset route. In vLLM 0.27 it is a
+development-only endpoint, so vLLM must have been started with:
+
+```bash
+VLLM_SERVER_DEV_MODE=1 ./bootstrap.sh serve
+```
+
+Setting the variable after vLLM starts does nothing. Development mode exposes
+cache-management routes that can disrupt in-flight service, so use it only on
+the isolated experiment box, not an externally accessible production server.
 
 ---
 

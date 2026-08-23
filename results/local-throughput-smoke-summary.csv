@@ -1,0 +1,5 @@
+prompt_tokens,requested_output_tokens,concurrency,cache_state,median_realized_cached_fraction,cache_valid_batches,total_batches,valid_requests,total_requests,median_ttft_ms,p90_ttft_ms,median_e2e_ms,p90_e2e_ms,median_request_decode_tokens_per_s,p10_request_decode_tokens_per_s,median_batch_output_tokens_per_s,p10_batch_output_tokens_per_s,measured_output_tokens
+1024,128,1,cold,0.0,1,1,1,1,165.417,165.417,1304.616,1304.616,111.547,111.547,98.104,98.104,128
+1024,128,1,warm,0.9844,1,1,1,1,63.284,63.284,1282.921,1282.921,104.194,104.194,99.758,99.758,128
+1024,128,2,cold,0.0,1,1,2,2,240.979,299.332,1510.443,1513.83,100.386,96.037,168.942,168.942,256
+1024,128,2,warm,0.9844,1,1,2,2,50.169,53.294,1212.414,1215.786,109.323,109.302,210.218,210.218,256

@@ -38,7 +38,18 @@ def _labels(raw: str | None) -> dict[str, str]:
 def parse_vllm_metrics(text: str, kv_bytes_per_token: int | None) -> dict[str, Any]:
     """Extract the small stable subset needed for placement experiments."""
     values: dict[str, float] = {}
+    counter_values: dict[str, float] = {}
     cache_config: dict[str, str] = {}
+
+    counter_names = {
+        "vllm:prefix_cache_queries_total",
+        "vllm:prefix_cache_hits_total",
+        "vllm:prompt_tokens_cached_total",
+        # Some Prometheus clients expose the counter's base name rather than
+        # its rendered ``_total`` name. Accept both without requiring a vLLM
+        # version check.
+        "vllm:prompt_tokens_cached",
+    }
 
     for line in text.splitlines():
         if not line or line.startswith("#"):
@@ -59,12 +70,23 @@ def parse_vllm_metrics(text: str, kv_bytes_per_token: int | None) -> dict[str, A
             "vllm:num_requests_waiting",
         }:
             values[name] = value
+        elif name in counter_names:
+            # Counters can have one series per worker/model. Their useful
+            # process-wide value is the sum, not whichever series appeared
+            # last in the exposition.
+            counter_values[name] = counter_values.get(name, 0.0) + value
 
     usage_fraction = values.get("vllm:kv_cache_usage_perc")
     size_tokens = _as_int(cache_config.get("kv_cache_size_tokens"))
     pool_bytes = _as_int(cache_config.get("kv_cache_memory_bytes"))
     if pool_bytes is None and size_tokens is not None and kv_bytes_per_token:
         pool_bytes = size_tokens * kv_bytes_per_token
+
+    prefix_queries = counter_values.get("vllm:prefix_cache_queries_total")
+    prefix_hits = counter_values.get("vllm:prefix_cache_hits_total")
+    prompt_tokens_cached = counter_values.get("vllm:prompt_tokens_cached_total")
+    if prompt_tokens_cached is None:
+        prompt_tokens_cached = counter_values.get("vllm:prompt_tokens_cached")
 
     out: dict[str, Any] = {
         "kv_cache_usage_pct": (
@@ -88,6 +110,14 @@ def parse_vllm_metrics(text: str, kv_bytes_per_token: int | None) -> dict[str, A
         "cache_dtype": cache_config.get("cache_dtype"),
         "requests_running": _as_number(values.get("vllm:num_requests_running")),
         "requests_waiting": _as_number(values.get("vllm:num_requests_waiting")),
+        "prefix_cache_queries_total": _as_number(prefix_queries),
+        "prefix_cache_hits_total": _as_number(prefix_hits),
+        "prefix_cache_hit_fraction_lifetime": (
+            round(prefix_hits / prefix_queries, 6)
+            if prefix_queries and prefix_hits is not None
+            else None
+        ),
+        "prompt_tokens_cached_total": _as_number(prompt_tokens_cached),
     }
     return out
 

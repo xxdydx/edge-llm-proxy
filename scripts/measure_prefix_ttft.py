@@ -109,6 +109,11 @@ def cache_counters(client: httpx.Client) -> tuple[float, float, str]:
 
 def reset_cache(client: httpx.Client) -> None:
     response = client.post("/reset_prefix_cache")
+    if response.status_code == 404:
+        raise RuntimeError(
+            "/reset_prefix_cache is unavailable; vLLM 0.27 exposes it only when "
+            "the server is started with VLLM_SERVER_DEV_MODE=1"
+        )
     response.raise_for_status()
 
 

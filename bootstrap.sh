@@ -62,6 +62,12 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
 
+# vLLM 0.27 gates destructive benchmark/debug routes such as
+# POST /reset_prefix_cache behind this environment variable. Leave it off for
+# ordinary serving; cache-controlled experiments must launch with
+# VLLM_SERVER_DEV_MODE=1.
+export VLLM_SERVER_DEV_MODE="${VLLM_SERVER_DEV_MODE:-0}"
+
 # Local agent calls should be deterministic.  The server-side generation
 # override supplies the default; edgeproxy also rewrites local requests because
 # an explicit client temperature takes precedence over a server default.
@@ -286,6 +292,7 @@ phase_serve() {
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --kv-cache-dtype "$KV_CACHE_DTYPE" \
     --enable-prefix-caching \
+    --enable-prompt-tokens-details \
     --enable-auto-tool-choice \
     --tool-call-parser "$TOOL_CALL_PARSER" \
     --override-generation-config "{\"temperature\":$VLLM_TEMPERATURE}" \

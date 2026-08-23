@@ -30,6 +30,62 @@ def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {k.lower(): v for k, v in headers.items() if k.lower() not in REDACT}
 
 
+def _token_count(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
+
+
+def build_token_accounting(usage: Any) -> dict[str, int | bool | None]:
+    """Build one provider-neutral token summary for every trace record.
+
+    Anthropic-compatible detailed usage partitions total input into uncached,
+    cache-read, and cache-creation tokens. Without cache-detail fields, the
+    provider's input total remains useful but its cache breakdown is unknown.
+    """
+    usage = usage if isinstance(usage, dict) else {}
+    raw_input = _token_count(usage.get("input_tokens"))
+    output = _token_count(usage.get("output_tokens"))
+    cache_details_available = (
+        "cache_read_input_tokens" in usage
+        or "cache_creation_input_tokens" in usage
+    )
+
+    if cache_details_available:
+        cache_read = _token_count(usage.get("cache_read_input_tokens")) or 0
+        cache_creation = _token_count(usage.get("cache_creation_input_tokens")) or 0
+        uncached = raw_input
+        total_input = (
+            raw_input + cache_read + cache_creation
+            if raw_input is not None
+            else None
+        )
+    else:
+        cache_read = None
+        cache_creation = None
+        uncached = None
+        total_input = raw_input
+
+    tokens_processed = (
+        total_input + output
+        if total_input is not None and output is not None
+        else None
+    )
+    return {
+        "input_tokens": total_input,
+        "output_tokens": output,
+        "tokens_processed": tokens_processed,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+        "uncached_input_tokens": uncached,
+        "cache_details_available": cache_details_available,
+    }
+
+
 # --------------------------------------------------------------------- SSE ---
 
 

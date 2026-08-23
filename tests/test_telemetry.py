@@ -10,6 +10,11 @@ vllm:kv_cache_usage_perc{model_name="local"} 0.25
 vllm:num_requests_running{model_name="local"} 2.0
 vllm:num_requests_waiting{model_name="local"} 1.0
 vllm:cache_config_info{block_size="16",cache_dtype="auto",kv_cache_memory_bytes="None",kv_cache_size_tokens="131072",num_gpu_blocks="8192"} 1.0
+vllm:prefix_cache_queries_total{model_name="local",engine="0"} 100
+vllm:prefix_cache_queries_total{model_name="local",engine="1"} 50
+vllm:prefix_cache_hits_total{model_name="local",engine="0"} 75
+vllm:prefix_cache_hits_total{model_name="local",engine="1"} 25
+vllm:prompt_tokens_cached_total{model_name="local"} 4096
 '''
 
 
@@ -23,6 +28,17 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(parsed["kv_cache_used_gib_est"], 1.75)
         self.assertEqual(parsed["requests_running"], 2)
         self.assertEqual(parsed["requests_waiting"], 1)
+        self.assertEqual(parsed["prefix_cache_queries_total"], 150)
+        self.assertEqual(parsed["prefix_cache_hits_total"], 100)
+        self.assertEqual(parsed["prefix_cache_hit_fraction_lifetime"], 0.666667)
+        self.assertEqual(parsed["prompt_tokens_cached_total"], 4096)
+
+    def test_missing_prefix_counters_are_unknown_not_zero(self):
+        parsed = parse_vllm_metrics("", kv_bytes_per_token=None)
+
+        self.assertIsNone(parsed["prefix_cache_queries_total"])
+        self.assertIsNone(parsed["prefix_cache_hits_total"])
+        self.assertIsNone(parsed["prefix_cache_hit_fraction_lifetime"])
 
     @patch(
         "builtins.open",

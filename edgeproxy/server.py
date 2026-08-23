@@ -25,7 +25,13 @@ from . import router
 from .shaping import LinkMonitor, LinkShaper
 from .telemetry import LocalResourceSampler
 from .timing import make_trace_extension
-from .trace.record import TraceWriter, parse_sse, reassemble, redact_headers
+from .trace.record import (
+    TraceWriter,
+    build_token_accounting,
+    parse_sse,
+    reassemble,
+    redact_headers,
+)
 
 log = logging.getLogger("edgeproxy")
 
@@ -225,6 +231,10 @@ def make_app(cfg: Config) -> FastAPI:
             "features": feature_dict,
             "headers": redact_headers(request.headers),
             "request": request_json,
+            # Present even on transport/provider errors so downstream analysis
+            # can distinguish unavailable usage (null) from measured zero.
+            "usage": {},
+            "token_accounting": build_token_accounting({}),
         }
         if placement == "local":
             record["local_resources"] = request.app.state.resource_sampler.snapshot()
@@ -286,9 +296,11 @@ def make_app(cfg: Config) -> FastAPI:
                 parsed = json.loads(payload)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 parsed = None
+            usage = _usage_of(parsed)
             record |= {
                 "response": parsed,
-                "usage": _usage_of(parsed),
+                "usage": usage,
+                "token_accounting": build_token_accounting(usage),
                 "timing": {
                     "total_ms": round((time.monotonic() - started) * 1000, 1),
                     "network_ms": net_ms,
@@ -327,6 +339,7 @@ def make_app(cfg: Config) -> FastAPI:
                     record.update({
                         "response": message,
                         "usage": usage,
+                        "token_accounting": build_token_accounting(usage),
                         "timing": {
                             "ttft_ms": ttft_ms,
                             "total_ms": round((time.monotonic() - started) * 1000, 1),
