@@ -230,6 +230,41 @@ curl -s localhost:8001/v1/messages -H 'content-type: application/json' \
        "messages":[{"role":"user","content":"Name three Python web frameworks."}]}'
 ```
 
+### Local latency and throughput benchmark
+
+`scripts/measure_local_throughput.py` drives vLLM directly so proxy and cloud
+effects do not contaminate the local-engine measurement. `prompts.txt` supplies
+three fixed prompt seeds. The runner expands them to exact token lengths and
+sweeps prompt length, output length, concurrency, and cold/warm prefix state.
+
+Start with a short smoke test:
+
+```bash
+/opt/venv/bin/python scripts/measure_local_throughput.py \
+  --tokenizer Qwen/Qwen2.5-7B-Instruct-AWQ \
+  --prompt-lengths 1024 \
+  --output-lengths 128 \
+  --concurrency 1,2 \
+  --cache-states cold,warm \
+  --repetitions 1 \
+  --output results/local-throughput-smoke.csv
+```
+
+Then run the declared full matrix (1K/8K/24K prompts, 128/512/2048 outputs,
+concurrency 1/2/4/8, cold/warm, three repetitions):
+
+```bash
+/opt/venv/bin/python scripts/measure_local_throughput.py \
+  --tokenizer Qwen/Qwen2.5-7B-Instruct-AWQ \
+  --output results/local-throughput-full.csv
+```
+
+The raw CSV has one row per request. The derived `-summary.csv` reports p50/p90
+TTFT and end-to-end latency, per-request post-first-token decode speed, aggregate
+batch throughput, realized cache fraction, and cache-state validity. A requested
+warm condition may be invalid under eviction pressure; the runner records the
+actual vLLM counter delta instead of assuming a hit.
+
 ---
 
 ## Rebuilding the container image

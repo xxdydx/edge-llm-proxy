@@ -18,6 +18,97 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ------------------------------------------------------------- vs code ------
+# Remote-SSH cannot work here: the FlowMesh entrypoint writes
+#   AllowTcpForwarding no
+# into /etc/ssh/sshd_config.d/ at *container start*, so it is re-applied every
+# session no matter what the image contains. Tunnels dial out instead of needing
+# an inbound forwarded port, so they are unaffected.
+#
+# There is no unattended login. The token cannot be copied between boxes (it is
+# encrypted with a machine-bound key), and a classic GitHub PAT satisfies
+# `tunnel user login` but the tunnels service rejects it with 401 — only the
+# device flow issues a token with the right scopes.
+#
+# So this runs *before* bootstrap: you authorise in ~20s while the slow part
+# (vLLM install, weights, CUDA graph capture — ~15 min) runs unattended after.
+vscode_tunnel() {
+  log "installing VS Code CLI on the box (if absent)"
+  ssh_run 'set -e
+    if [ ! -x ~/code ] && ! ls ~/.vscode-server/code-* >/dev/null 2>&1; then
+      curl -sL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" \
+        -o /tmp/vscode-cli.tgz && tar -xf /tmp/vscode-cli.tgz -C ~ && chmod +x ~/code
+    fi' || { warn "could not install the VS Code CLI"; return 1; }
+
+  # No unattended option exists. A classic GitHub PAT satisfies `tunnel user
+  # login` but the tunnels service rejects it with 401 — only the device flow
+  # issues a token with the right scopes. And the resulting token cannot be
+  # copied between boxes: it is stored encrypted with a machine-bound key.
+  # So: surface the device code and wait, once per session.
+
+  # --provider github skips the interactive account menu, which has no TTY here
+  # and would otherwise spin forever redrawing itself.
+  log "starting tunnel"
+  ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
+    tmux kill-session -t tunnel 2>/dev/null || true
+    rm -f ~/tunnel.log
+    if ! "$CLI" tunnel user show 2>&1 | grep -qi "logged in with"; then
+      tmux new -d -s tunnel "$CLI tunnel user login --provider github >~/tunnel.log 2>&1"
+    fi'
+  # If already logged in, the loop below starts the tunnel on its first pass.
+
+  local waited=0
+  while [ "$waited" -lt 300 ]; do
+    # Ask the CLI whether it is logged in rather than grepping its log for a
+    # success string — the login command prints nothing reliable on success,
+    # and `tunnel user show` is the authoritative answer.
+    if [ -z "${tunnel_started:-}" ] \
+       && ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
+                   "$CLI" tunnel user show 2>&1 | grep -qi "logged in with"'; then
+      log "authorised — starting tunnel"
+      ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
+        tmux kill-session -t tunnel 2>/dev/null || true
+        rm -f ~/tunnel.log
+        tmux new -d -s tunnel "$CLI tunnel --accept-server-license-terms --name fmbox >~/tunnel.log 2>&1"'
+      tunnel_started=1
+    fi
+
+    if ssh_run 'grep -qi "devtunnels.ms\|Open:" ~/tunnel.log 2>/dev/null'; then
+      log "tunnel is up: https://vscode.dev/tunnel/fmbox"
+      return 0
+    fi
+
+    if [ -z "${prompted:-}" ] && ssh_run 'grep -q "github.com/login/device" ~/tunnel.log 2>/dev/null'; then
+      prompted=1
+      printf '\n\033[1;33m  GitHub login needed (once per session):\033[0m\n'
+      ssh_run 'grep -o "https://github.com/login/device[^ ]*\|use code [A-Z0-9-]*" ~/tunnel.log | sort -u' \
+        | sed 's/^/    /'
+      printf '  waiting for you to authorise...\n\n'
+    fi
+
+    sleep 3; waited=$((waited + 3))
+  done
+
+  warn "tunnel did not come up in ${waited}s — check: ssh fmbox 'cat ~/tunnel.log'"
+  return 1
+}
+
+# `--tunnel-only`: the devbox from an earlier run of this script is still up,
+# but the 300s login window in vscode_tunnel closed before you got to the
+# device-code prompt. This re-runs just the tunnel dance against the fmbox
+# ssh alias already sitting in ~/.ssh/config — no workflow resubmit, no
+# re-running the 15-minute bootstrap.
+TUNNEL_ONLY=0
+[ "${1:-}" = "--tunnel-only" ] && TUNNEL_ONLY=1
+
+if [ "$TUNNEL_ONLY" -eq 1 ]; then
+  ssh -o BatchMode=yes -o ConnectTimeout=10 fmbox true 2>/dev/null \
+    || die "fmbox isn't reachable — is the devbox still up? (flowmesh task list)"
+  ssh_run() { ssh fmbox "$@"; }
+  vscode_tunnel && log "tunnel ready: https://vscode.dev/tunnel/fmbox"
+  exit $?
+fi
+
 command -v flowmesh >/dev/null || die "flowmesh CLI not found — see setup-instructions.md"
 [ -f "$WORKFLOW" ] || die "$WORKFLOW not found — run this from the repo root"
 [ -f .env ] || warn ".env not found locally — edgeproxy will come up with no upstream token"
@@ -170,85 +261,17 @@ if [ -f .env ]; then
   scp "${SSH_OPTS[@]}" .env "$SSH_TARGET:~/.env"
 fi
 
-# ------------------------------------------------------------- vs code ------
-# Remote-SSH cannot work here: the FlowMesh entrypoint writes
-#   AllowTcpForwarding no
-# into /etc/ssh/sshd_config.d/ at *container start*, so it is re-applied every
-# session no matter what the image contains. Tunnels dial out instead of needing
-# an inbound forwarded port, so they are unaffected.
-#
-# There is no unattended login. The token cannot be copied between boxes (it is
-# encrypted with a machine-bound key), and a classic GitHub PAT satisfies
-# `tunnel user login` but the tunnels service rejects it with 401 — only the
-# device flow issues a token with the right scopes.
-#
-# So this runs *before* bootstrap: you authorise in ~20s while the slow part
-# (vLLM install, weights, CUDA graph capture — ~15 min) runs unattended after.
+# vscode_tunnel() is defined near the top of the script, alongside the
+# --tunnel-only entrypoint that reuses it after the fact.
 REMOTE_FOLDER="/home/flowmesh/$REPO_DIR_NAME"
 CODE_BIN="${CODE_BIN:-/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code}"
 
-vscode_tunnel() {
-  log "installing VS Code CLI on the box (if absent)"
-  ssh_run 'set -e
-    if [ ! -x ~/code ] && ! ls ~/.vscode-server/code-* >/dev/null 2>&1; then
-      curl -sL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" \
-        -o /tmp/vscode-cli.tgz && tar -xf /tmp/vscode-cli.tgz -C ~ && chmod +x ~/code
-    fi' || { warn "could not install the VS Code CLI"; return 1; }
-
-  # No unattended option exists. A classic GitHub PAT satisfies `tunnel user
-  # login` but the tunnels service rejects it with 401 — only the device flow
-  # issues a token with the right scopes. And the resulting token cannot be
-  # copied between boxes: it is stored encrypted with a machine-bound key.
-  # So: surface the device code and wait, once per session.
-
-  # --provider github skips the interactive account menu, which has no TTY here
-  # and would otherwise spin forever redrawing itself.
-  log "starting tunnel"
-  ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
-    tmux kill-session -t tunnel 2>/dev/null || true
-    rm -f ~/tunnel.log
-    if ! "$CLI" tunnel user show 2>&1 | grep -qi "logged in with"; then
-      tmux new -d -s tunnel "$CLI tunnel user login --provider github >~/tunnel.log 2>&1"
-    fi'
-  # If already logged in, the loop below starts the tunnel on its first pass.
-
-  local waited=0
-  while [ "$waited" -lt 300 ]; do
-    # Ask the CLI whether it is logged in rather than grepping its log for a
-    # success string — the login command prints nothing reliable on success,
-    # and `tunnel user show` is the authoritative answer.
-    if [ -z "${tunnel_started:-}" ] \
-       && ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
-                   "$CLI" tunnel user show 2>&1 | grep -qi "logged in with"'; then
-      log "authorised — starting tunnel"
-      ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
-        tmux kill-session -t tunnel 2>/dev/null || true
-        rm -f ~/tunnel.log
-        tmux new -d -s tunnel "$CLI tunnel --accept-server-license-terms --name fmbox >~/tunnel.log 2>&1"'
-      tunnel_started=1
-    fi
-
-    if ssh_run 'grep -qi "devtunnels.ms\|Open:" ~/tunnel.log 2>/dev/null'; then
-      log "tunnel is up: https://vscode.dev/tunnel/fmbox"
-      return 0
-    fi
-
-    if [ -z "${prompted:-}" ] && ssh_run 'grep -q "github.com/login/device" ~/tunnel.log 2>/dev/null'; then
-      prompted=1
-      printf '\n\033[1;33m  GitHub login needed (once per session):\033[0m\n'
-      ssh_run 'grep -o "https://github.com/login/device[^ ]*\|use code [A-Z0-9-]*" ~/tunnel.log | sort -u' \
-        | sed 's/^/    /'
-      printf '  waiting for you to authorise...\n\n'
-    fi
-
-    sleep 3; waited=$((waited + 3))
-  done
-
-  warn "tunnel did not come up in ${waited}s — check: ssh fmbox 'cat ~/tunnel.log'"
-  return 1
-}
-
-vscode_tunnel || warn "continuing without a tunnel — bootstrap still runs"
+if vscode_tunnel; then
+  TUNNEL_OK=1
+else
+  TUNNEL_OK=0
+  warn "continuing without a tunnel — bootstrap still runs"
+fi
 
 # ------------------------------------------------------------- bootstrap ----
 # Deliberately after the tunnel: the login above wants ~20s of your attention,
@@ -274,6 +297,14 @@ else
   warn "open manually: vscode://vscode-remote/tunnel+fmbox$REMOTE_FOLDER"
 fi
 
+if [ "$TUNNEL_OK" -eq 1 ]; then
+  VSCODE_HINT="    vs code      https://vscode.dev/tunnel/fmbox
+                 (Remote Explorer -> Tunnels -> fmbox; NOT the SSH entry)"
+else
+  VSCODE_HINT="    vs code      not authenticated — run: ./flowmesh-up.sh --tunnel-only
+                 (if that hangs too, check: ssh fmbox 'cat ~/tunnel.log')"
+fi
+
 cat <<EOF
 
   done.
@@ -283,8 +314,7 @@ cat <<EOF
     stop       flowmesh task stop $TASK_ID
 
     shell        ssh fmbox
-    vs code      https://vscode.dev/tunnel/fmbox
-                 (Remote Explorer -> Tunnels -> fmbox; NOT the SSH entry)
+$VSCODE_HINT
     copy files   scp fmbox:~/$REPO_DIR_NAME/results/* ./results/
     tunnel logs  ssh fmbox 'tmux attach -t tunnel'
 

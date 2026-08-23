@@ -1,0 +1,13 @@
+# Controlled prompt seeds for scripts/measure_local_throughput.py.
+#
+# Format: prompt_id<TAB>prompt text
+# Blank lines and lines beginning with # are ignored.
+#
+# The runner tokenizes each seed, prefixes a unique request marker, and repeats
+# the seed tokens until the requested input length is reached exactly. vLLM is
+# asked to ignore EOS so every request attempts the configured output length.
+# These prompts measure serving performance, not answer quality.
+
+python_guide	Write a detailed technical guide to designing a reliable asynchronous Python service. Cover architecture, concurrency, error handling, testing, observability, deployment, and concrete examples. Continue until every section is fully explained.
+algorithm_analysis	Analyze several approaches to processing a very large directed graph. Compare time complexity, memory use, parallelism, failure modes, and practical implementation tradeoffs. Show the reasoning carefully and continue with detailed examples.
+systems_design	Design a production distributed job scheduler. Explain admission control, queues, retries, idempotency, worker heartbeats, load balancing, persistence, metrics, and recovery from partial failures. Produce a thorough implementation-oriented answer.

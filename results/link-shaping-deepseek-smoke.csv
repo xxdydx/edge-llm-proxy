@@ -1,0 +1,2 @@
+timestamp_utc,mode,sequence,repetition,configured_delay_ms,configured_jitter_ms,configured_bandwidth_mbps,request_bytes,response_bytes,placement,status,shaped_ms,ttft_ms,total_ms,client_total_ms,transport_network_ms,effective_network_ms,raw_server_ttft_ms,corrected_server_ttft_ms,connect_ms,tls_ms,send_ms,response_headers_ms,valid
+2026-08-22T04:01:45.987060+00:00,cloud,1,0,0.0,0.0,0.0,134,2071,cloud,200,0.0,268.2,786.5,792.904,146.4,146.4,121.8,121.8,7.43,14.59,0.66,123.76,True

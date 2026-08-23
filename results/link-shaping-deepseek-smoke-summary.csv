@@ -1,0 +1,2 @@
+configured_delay_ms,valid_samples,total_samples,median_shaped_ms,median_ttft_ms,p10_ttft_ms,p90_ttft_ms,median_total_ms,median_transport_network_ms,median_effective_network_ms,median_raw_server_ttft_ms,median_corrected_server_ttft_ms,median_response_headers_ms,delta_ttft_vs_zero_ms,delta_shaped_vs_zero_ms,delta_raw_server_vs_zero_ms,delta_corrected_server_vs_zero_ms,ttft_tracks_shaping,corrected_server_stable
+0.0,1,1,0.0,268.2,268.2,268.2,786.5,146.4,146.4,121.8,121.8,123.76,0.0,0.0,0.0,0.0,True,True
