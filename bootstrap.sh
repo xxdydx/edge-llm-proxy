@@ -237,8 +237,10 @@ phase_install() {
     curl -L "https://github.com/xxdydx/vllm/archive/refs/heads/${vllm_branch}.tar.gz" \
       | tar xz -C "$vllm_src" --strip-components=1
   fi
-  VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --torch-backend=auto \
-    || VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --extra-index-url "$TORCH_INDEX" \
+  export VLLM_VERSION_OVERRIDE="${VLLM_VERSION_OVERRIDE:-0.0.0}"
+  export VLLM_PRECOMPILED_WHEEL_COMMIT="${VLLM_PRECOMPILED_WHEEL_COMMIT:-ecfa7bb37316a3c1dab345fea4178d81f63b1ce4}"
+  VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --torch-backend=auto --index-strategy unsafe-best-match \
+    || VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --extra-index-url "$TORCH_INDEX" --index-strategy unsafe-best-match \
     || die "vLLM fork install failed — see PLAN.md §2, or set VLLM_PRECOMPILED_WHEEL_COMMIT if the fork's base commit has no prebuilt wheel"
 
   if [ -f "$REPO_DIR/pyproject.toml" ]; then
