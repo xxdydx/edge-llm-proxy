@@ -160,8 +160,14 @@ cp ~/.env .env          # if you copied one over
 ./bootstrap.sh
 ```
 
-Defaults: **`Qwen/Qwen2.5-Coder-7B-Instruct-AWQ`**, 4-bit AWQ, 32K context,
-`--gpu-memory-utilization 0.90`, prefix caching on, tool calling on with the
+The one-command path uploads a sanitized snapshot of the current local working
+tree by default, including uncommitted source changes. It excludes `.env`,
+traces, results, logs, `claude-memory`, Git metadata, and caches; `.env` is sent
+separately. Set `SOURCE_MODE=github` to restore the public-main download path.
+
+Defaults: **`Qwen/Qwen2.5-7B-Instruct-AWQ`**, 4-bit AWQ, 60K serving context
+using the model's documented static YaRN scaling, `--gpu-memory-utilization
+0.90`, FP16/BF16 KV cache, prefix caching on, and tool calling on with the
 `hermes` parser. Serves on `:8001`, edgeproxy on `:8000`.
 
 Cold run is ~15 min: vLLM install ~5, weights ~3 (5 GB), engine startup ~4
@@ -190,11 +196,15 @@ Overridable via environment:
 
 | Variable | Default |
 | --- | --- |
-| `MODEL` | `Qwen/Qwen2.5-Coder-7B-Instruct-AWQ` |
+| `MODEL` | `Qwen/Qwen2.5-7B-Instruct-AWQ` |
 | `SERVED_NAME` | `local` (space-separated list for aliases) |
-| `MAX_MODEL_LEN` | `32768` |
+| `MAX_MODEL_LEN` | `60000` |
+| `NATIVE_MAX_MODEL_LEN` | `32768` |
+| `YARN_FACTOR` / `YARN_ROPE_THETA` | `4.0` / `1000000` |
+| `VLLM_HF_OVERRIDES` | auto-generated for Qwen2.5 when the requested cap exceeds 32K |
 | `GPU_MEM_UTIL` | `0.90` |
-| `KV_CACHE_DTYPE` | `auto` (`fp8` roughly doubles KV capacity) |
+| `KV_CACHE_DTYPE` | `auto`; do not enable FP8 without a separate sm_120 correctness test |
+| `ATTENTION_BACKEND` | `FLASH_ATTN`; startup fails rather than silently falling back |
 | `VLLM_SERVER_DEV_MODE` | `0`; set `1` only for cache-reset benchmarks |
 | `TOOL_CALL_PARSER` | `hermes` (model-specific) |
 | `VLLM_EXTRA_ARGS` | empty (`--enforce-eager` skips CUDA graphs) |
@@ -205,6 +215,16 @@ MODEL=Qwen/Qwen3-8B-AWQ ./bootstrap.sh
 MAX_MODEL_LEN=8192 GPU_MEM_UTIL=0.85 ./bootstrap.sh serve
 KV_CACHE_DTYPE=fp8 ./bootstrap.sh serve
 ```
+
+At the default 60K cap, bootstrap passes Qwen2.5's YaRN settings through
+`--hf-overrides`; it never bypasses the model-length guard with
+`VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`. Static YaRN can reduce short-context quality,
+so validate both short prompts and prompts beyond 32K. FlashAttention is an
+explicit requirement: bootstrap passes `--attention-backend FLASH_ATTN` and
+fails if the startup log does not confirm it. Torch compilation and CUDA graph
+capture remain enabled. `VLLM_USE_FLASHINFER_SAMPLER=0` disables only
+FlashInfer's JIT-compiled sampler. The selected attention backend and
+graph-capture evidence are copied into each `results/env-*.txt` file.
 
 `serve` writes `results/env-<timestamp>.txt` with the GPU details and KV cache
 size. That number is the denominator for every prefix-cache experiment — pull it

@@ -2,9 +2,10 @@
 #
 # flowmesh-up.sh — one command from a cold Mac to a running vLLM + edgeproxy.
 #
-# Submits ssh-workflow.yaml, waits for the session, pushes .env over, then
-# runs the box-side bootstrap.sh non-interactively. Run this from the repo
-# root on your Mac (not on the box):
+# Submits ssh-workflow.yaml, waits for the session, uploads a sanitized snapshot
+# of the current local source plus .env separately, then runs bootstrap.sh.
+# This means uncommitted implementation work reaches each disposable box while
+# secrets, traces, results, logs, and the private memory layer do not.
 #
 #   ./flowmesh-up.sh
 #
@@ -13,6 +14,7 @@ set -euo pipefail
 WORKFLOW="${WORKFLOW:-ssh-workflow.yaml}"
 REPO_URL="${REPO_URL:-https://github.com/xxdydx/edge-llm-proxy}"
 REPO_DIR_NAME="edge-llm-proxy-main"
+SOURCE_MODE="${SOURCE_MODE:-local}"  # local (default) or github
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -111,7 +113,43 @@ fi
 
 command -v flowmesh >/dev/null || die "flowmesh CLI not found — see setup-instructions.md"
 [ -f "$WORKFLOW" ] || die "$WORKFLOW not found — run this from the repo root"
+[ -f bootstrap.sh ] && [ -f pyproject.toml ] \
+  || die "run this from the repository root (bootstrap.sh and pyproject.toml are required)"
 [ -f .env ] || warn ".env not found locally — edgeproxy will come up with no upstream token"
+case "$SOURCE_MODE" in
+  local|github) ;;
+  *) die "SOURCE_MODE must be 'local' or 'github' (got '$SOURCE_MODE')" ;;
+esac
+
+# Validate and package before submitting a paid GPU task. If the local tree is
+# malformed, fail here rather than leaving an unusable box running.
+if [ "$SOURCE_MODE" = local ]; then
+  LOCAL_SOURCE_ARCHIVE="$(mktemp -t flowmesh-source).tar.gz"
+  log "packing current local source (excluding secrets, traces, results, logs, and memory)"
+  COPYFILE_DISABLE=1 tar -czf "$LOCAL_SOURCE_ARCHIVE" \
+    --exclude='./.git' \
+    --exclude='./.env' \
+    --exclude='./.env.*' \
+    --exclude='./.venv' \
+    --exclude='./venv' \
+    --exclude='./claude-memory' \
+    --exclude='./traces' \
+    --exclude='./results' \
+    --exclude='./logs' \
+    --exclude='./.claude' \
+    --exclude='./.pytest_cache' \
+    --exclude='./.ruff_cache' \
+    --exclude='./.mypy_cache' \
+    --exclude='*/__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='*.pid' \
+    --exclude='.DS_Store' \
+    .
+  tar -tzf "$LOCAL_SOURCE_ARCHIVE" | grep -E '^\./bootstrap\.sh$' >/dev/null \
+    || die "source archive validation failed: bootstrap.sh missing"
+  tar -tzf "$LOCAL_SOURCE_ARCHIVE" | grep -E '^\./pyproject\.toml$' >/dev/null \
+    || die "source archive validation failed: pyproject.toml missing"
+fi
 
 # ------------------------------------------------------------------ submit --
 
@@ -128,6 +166,7 @@ log "task: $TASK_ID"
 # task running after Ctrl+C.
 cleanup() {
   trap - INT TERM HUP
+  rm -f "${LOCAL_SOURCE_ARCHIVE:-}"
   printf '\n'
   if [ -n "${NO_AUTOSTOP:-}" ]; then
     log "leaving $TASK_ID running (NO_AUTOSTOP set)"
@@ -273,14 +312,39 @@ else
   warn "continuing without a tunnel — bootstrap still runs"
 fi
 
+# ------------------------------------------------------------- source -------
+# The repository is public, but the working implementation is often ahead of
+# GitHub. Package the current local tree by default. Explicit excludes prevent
+# credentials, real prompts, measurements, private notes, and bulky caches from
+# crossing onto the box. .env is transferred separately above.
+REMOTE_SOURCE_ARCHIVE="flowmesh-source.tar.gz"
+if [ "$SOURCE_MODE" = local ]; then
+  log "uploading current local source"
+  scp "${SSH_OPTS[@]}" "$LOCAL_SOURCE_ARCHIVE" "$SSH_TARGET:~/$REMOTE_SOURCE_ARCHIVE"
+  rm -f "$LOCAL_SOURCE_ARCHIVE"
+fi
+
 # ------------------------------------------------------------- bootstrap ----
 # Deliberately after the tunnel: the login above wants ~20s of your attention,
 # this wants ~15 minutes of none. ./bootstrap.sh with no args runs
 # check -> install -> model -> serve, including its own health polling and
 # ready banner, so there is nothing to duplicate here.
 
-log "fetching repo and running bootstrap.sh (slow part: vLLM install + weights)"
-ssh_run bash -s <<REMOTE
+log "installing $SOURCE_MODE source and running bootstrap.sh (slow part: vLLM install + weights)"
+if [ "$SOURCE_MODE" = local ]; then
+  ssh_run bash -s <<REMOTE
+set -euo pipefail
+cd ~
+rm -rf "$REPO_DIR_NAME"
+mkdir "$REPO_DIR_NAME"
+tar -xzf "$REMOTE_SOURCE_ARCHIVE" -C "$REPO_DIR_NAME"
+rm -f "$REMOTE_SOURCE_ARCHIVE"
+if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
+cd "$REPO_DIR_NAME"
+./bootstrap.sh
+REMOTE
+else
+  ssh_run bash -s <<REMOTE
 set -euo pipefail
 cd ~
 rm -rf "$REPO_DIR_NAME"
@@ -289,6 +353,7 @@ if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
 cd "$REPO_DIR_NAME"
 ./bootstrap.sh
 REMOTE
+fi
 
 if [ -x "$CODE_BIN" ]; then
   log "opening VS Code on the box"

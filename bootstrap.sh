@@ -59,8 +59,22 @@ TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 # harness straight at vLLM.
 SERVED_NAME="${SERVED_NAME:-local}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-60000}"
+NATIVE_MAX_MODEL_LEN="${NATIVE_MAX_MODEL_LEN:-32768}"
+YARN_FACTOR="${YARN_FACTOR:-4.0}"
+YARN_ROPE_THETA="${YARN_ROPE_THETA:-1000000}"
+# Empty means bootstrap generates the documented Qwen2.5 YaRN override when
+# MAX_MODEL_LEN exceeds NATIVE_MAX_MODEL_LEN. Non-Qwen models must supply their
+# own model-specific JSON rather than inheriting a potentially unsafe recipe.
+VLLM_HF_OVERRIDES="${VLLM_HF_OVERRIDES:-}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.90}"
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # set fp8 to roughly double KV capacity
+# Keep FP16/BF16 KV by default. FP8 buys capacity, but needs a separate
+# correctness run on sm_120 before it is an acceptable default.
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"
+
+# FlashAttention is an explicit experiment requirement: do not silently fall
+# back to another backend. Override only for a deliberate comparison or
+# diagnosis (for example ATTENTION_BACKEND=TRITON_ATTN).
+ATTENTION_BACKEND="${ATTENTION_BACKEND:-FLASH_ATTN}"
 
 # vLLM 0.27 gates destructive benchmark/debug routes such as
 # POST /reset_prefix_cache behind this environment variable. Leave it off for
@@ -86,11 +100,10 @@ export VLLM_ENFORCE_STRICT_TOOL_CALLING="${VLLM_ENFORCE_STRICT_TOOL_CALLING:-tru
 #   VLLM_EXTRA_ARGS="-O0"              lowest compilation level
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
-# FlashInfer JIT-compiles its sampling kernels on first use, which needs ninja
-# *and* nvcc. The session image has neither (a full CUDA toolkit would add
-# gigabytes for a sampler), so vLLM dies late in startup with a bare
-# FileNotFoundError. FlashInfer is only used for top-p/top-k sampling here —
-# attention runs on FLASH_ATTN — so turning it off costs essentially nothing.
+# FlashInfer JIT-compiles its *sampling* kernels on first use, which needs ninja
+# and nvcc. The session image has neither, so disable that sampler. This does
+# not disable FlashInfer attention: attention is selected independently by
+# vLLM and is reported from the startup log below.
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 VLLM_PORT="${VLLM_PORT:-8001}"
@@ -284,13 +297,54 @@ wait_for_http() {
 phase_serve() {
   mkdir -p "$LOG_DIR"
 
+  [[ "$MAX_MODEL_LEN" =~ ^[1-9][0-9]*$ ]] \
+    || die "MAX_MODEL_LEN must be a positive integer (got '$MAX_MODEL_LEN')"
+  [[ "$NATIVE_MAX_MODEL_LEN" =~ ^[1-9][0-9]*$ ]] \
+    || die "NATIVE_MAX_MODEL_LEN must be a positive integer (got '$NATIVE_MAX_MODEL_LEN')"
+
+  local hf_override_args=()
+  if [ "$MAX_MODEL_LEN" -gt "$NATIVE_MAX_MODEL_LEN" ]; then
+    if [ -z "$VLLM_HF_OVERRIDES" ]; then
+      case "$MODEL" in
+        Qwen/Qwen2.5-*)
+          VLLM_HF_OVERRIDES="{\"rope_parameters\":{\"factor\":$YARN_FACTOR,\"original_max_position_embeddings\":$NATIVE_MAX_MODEL_LEN,\"rope_theta\":$YARN_ROPE_THETA,\"rope_type\":\"yarn\"}}"
+          ;;
+        *)
+          die "MAX_MODEL_LEN=$MAX_MODEL_LEN exceeds native $NATIVE_MAX_MODEL_LEN for $MODEL; set model-specific VLLM_HF_OVERRIDES"
+          ;;
+      esac
+    fi
+    hf_override_args=(--hf-overrides "$VLLM_HF_OVERRIDES")
+    log "long context: $MAX_MODEL_LEN tokens with model-specific RoPE override"
+    warn "static YaRN can reduce short-context quality; validate both short and >32K prompts"
+  elif [ -n "$VLLM_HF_OVERRIDES" ]; then
+    hf_override_args=(--hf-overrides "$VLLM_HF_OVERRIDES")
+    log "applying explicit Hugging Face config override"
+  fi
+
+  local attention_args=()
+  if [ "$ATTENTION_BACKEND" != auto ]; then
+    attention_args=(--attention-backend "$ATTENTION_BACKEND")
+    warn "forcing attention backend: $ATTENTION_BACKEND"
+  else
+    log "attention backend: auto (vLLM selects the best compatible optimized backend)"
+  fi
+
+  case " $VLLM_EXTRA_ARGS " in
+    *" --enforce-eager "*|*" -O0 "*)
+      warn "VLLM_EXTRA_ARGS disables or reduces CUDA graphs/torch.compile optimizations"
+      ;;
+  esac
+
   log "starting vLLM on :$VLLM_PORT"
   nohup "$VENV/bin/vllm" serve "$MODEL" \
     --served-model-name $SERVED_NAME \
     --port "$VLLM_PORT" \
     --max-model-len "$MAX_MODEL_LEN" \
+    "${hf_override_args[@]}" \
     --gpu-memory-utilization "$GPU_MEM_UTIL" \
     --kv-cache-dtype "$KV_CACHE_DTYPE" \
+    "${attention_args[@]}" \
     --enable-prefix-caching \
     --enable-prompt-tokens-details \
     --enable-auto-tool-choice \
@@ -304,6 +358,20 @@ phase_serve() {
 
   wait_for_http "http://localhost:$VLLM_PORT/health" vLLM 600 \
     "$vllm_pid" "$LOG_DIR/vllm.log"
+
+  local attention_line
+  attention_line="$(grep -iE 'using .*attention backend|attention backend.*selected' "$LOG_DIR/vllm.log" | tail -1 || true)"
+  if [ -n "$attention_line" ]; then
+    log "verified: $attention_line"
+    if [ "$ATTENTION_BACKEND" != auto ] \
+       && ! grep -Fqi "$ATTENTION_BACKEND" <<<"$attention_line"; then
+      die "requested $ATTENTION_BACKEND but vLLM reported: $attention_line"
+    fi
+  elif [ "$ATTENTION_BACKEND" != auto ]; then
+    die "vLLM is healthy but did not explicitly confirm required attention backend $ATTENTION_BACKEND"
+  else
+    warn "vLLM is healthy, but its log did not expose the selected attention backend"
+  fi
 
   # Convert vLLM's token-level KV occupancy into an estimated GiB figure in
   # proxy traces. This is derived rather than hard-coded so changing MODEL or
@@ -352,8 +420,10 @@ PY
     echo "timestamp    $stamp"
     echo "model        $MODEL"
     echo "max_model_len $MAX_MODEL_LEN  gpu_mem_util $GPU_MEM_UTIL  kv_dtype $KV_CACHE_DTYPE"
+    echo "native_model_len $NATIVE_MAX_MODEL_LEN  attention_backend $ATTENTION_BACKEND"
+    if [ -n "$VLLM_HF_OVERRIDES" ]; then echo "hf_overrides $VLLM_HF_OVERRIDES"; fi
     nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader
-    grep -iE 'gpu blocks|kv cache size|graph captur' "$LOG_DIR/vllm.log" | head -20 || true
+    grep -iE 'gpu blocks|kv cache size|graph captur|attention backend' "$LOG_DIR/vllm.log" | head -30 || true
   } > "$REPO_DIR/results/env-$stamp.txt"
   log "wrote results/env-$stamp.txt"
 
