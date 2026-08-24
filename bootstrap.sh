@@ -360,7 +360,10 @@ phase_serve() {
     "$vllm_pid" "$LOG_DIR/vllm.log"
 
   local attention_line
-  attention_line="$(grep -iE 'using .*attention backend|attention backend.*selected' "$LOG_DIR/vllm.log" | tail -1 || true)"
+  # vLLM 0.27.1 writes e.g.:
+  #   Using AttentionBackendEnum.FLASH_ATTN backend.
+  # Older/newer versions may use "Using FLASH_ATTN attention backend".
+  attention_line="$(grep -iE 'using .*attention.*backend|using .*flash_attn.*backend' "$LOG_DIR/vllm.log" | tail -1 || true)"
   if [ -n "$attention_line" ]; then
     log "verified: $attention_line"
     if [ "$ATTENTION_BACKEND" != auto ] \
