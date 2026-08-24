@@ -229,11 +229,17 @@ phase_install() {
     uv venv "$VENV" --python 3.12
   fi
 
-  log "installing vLLM (this is the slow part)"
-  local spec="vllm${VLLM_VERSION:+==$VLLM_VERSION}"
-  VIRTUAL_ENV="$VENV" uv pip install "$spec" --torch-backend=auto \
-    || VIRTUAL_ENV="$VENV" uv pip install "$spec" --extra-index-url "$TORCH_INDEX" \
-    || die "vLLM install failed — see the sm_120 fallback notes in PLAN.md §2"
+  log "installing vLLM fork (probe patch, precompiled Python-only build)"
+  local vllm_branch="${VLLM_FORK_BRANCH:-vllm-expose-cached-tokens-count}"
+  local vllm_src="$SCRATCH/vllm-src"
+  if [ ! -d "$vllm_src" ]; then
+    mkdir -p "$vllm_src"
+    curl -L "https://github.com/xxdydx/vllm/archive/refs/heads/${vllm_branch}.tar.gz" \
+      | tar xz -C "$vllm_src" --strip-components=1
+  fi
+  VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --torch-backend=auto \
+    || VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --extra-index-url "$TORCH_INDEX" \
+    || die "vLLM fork install failed — see PLAN.md §2, or set VLLM_PRECOMPILED_WHEEL_COMMIT if the fork's base commit has no prebuilt wheel"
 
   if [ -f "$REPO_DIR/pyproject.toml" ]; then
     log "installing project deps"
