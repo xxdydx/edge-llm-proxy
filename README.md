@@ -206,6 +206,8 @@ Overridable via environment:
 | `KV_CACHE_DTYPE` | `auto`; do not enable FP8 without a separate sm_120 correctness test |
 | `ATTENTION_BACKEND` | `FLASH_ATTN`; startup fails rather than silently falling back |
 | `VLLM_SERVER_DEV_MODE` | `0`; set `1` only for cache-reset benchmarks |
+| `VLLM_FORK_BRANCH` | `vllm-cache-probe-cu130` |
+| `VLLM_PRECOMPILED_WHEEL_COMMIT` | `4ca856b0b59d87c7b167d1bd8c748421719c9a57` |
 | `TOOL_CALL_PARSER` | `hermes` (model-specific) |
 | `VLLM_EXTRA_ARGS` | empty (`--enforce-eager` skips CUDA graphs) |
 | `VLLM_PORT` / `PROXY_PORT` | `8001` / `8000` |

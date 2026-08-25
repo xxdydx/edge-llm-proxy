@@ -230,7 +230,10 @@ phase_install() {
   fi
 
   log "installing vLLM fork (probe patch, precompiled Python-only build)"
-  local vllm_branch="${VLLM_FORK_BRANCH:-vllm-expose-cached-tokens-count}"
+  # This branch is the probe-only Python patch directly on top of the wheel
+  # commit below. Keep both defaults aligned: Python-only vLLM installs reuse
+  # native binaries from that exact upstream base.
+  local vllm_branch="${VLLM_FORK_BRANCH:-vllm-cache-probe-cu130}"
   local vllm_src="$SCRATCH/vllm-src"
   if [ ! -d "$vllm_src" ]; then
     mkdir -p "$vllm_src"
@@ -238,7 +241,7 @@ phase_install() {
       | tar xz -C "$vllm_src" --strip-components=1
   fi
   export VLLM_VERSION_OVERRIDE="${VLLM_VERSION_OVERRIDE:-0.0.0}"
-  export VLLM_PRECOMPILED_WHEEL_COMMIT="${VLLM_PRECOMPILED_WHEEL_COMMIT:-ecfa7bb37316a3c1dab345fea4178d81f63b1ce4}"
+  export VLLM_PRECOMPILED_WHEEL_COMMIT="${VLLM_PRECOMPILED_WHEEL_COMMIT:-4ca856b0b59d87c7b167d1bd8c748421719c9a57}"
   VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --torch-backend=auto --index-strategy unsafe-best-match \
     || VIRTUAL_ENV="$VENV" VLLM_USE_PRECOMPILED=1 uv pip install -e "$vllm_src" --extra-index-url "$TORCH_INDEX" --index-strategy unsafe-best-match \
     || die "vLLM fork install failed — see PLAN.md §2, or set VLLM_PRECOMPILED_WHEEL_COMMIT if the fork's base commit has no prebuilt wheel"
