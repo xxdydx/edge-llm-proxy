@@ -13,22 +13,31 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from .config import Config, parse_args
 from . import router
+from .cloud_cache import (
+    CloudCacheObservation,
+    CloudCachePrediction,
+    CloudCacheTracker,
+    PrefixChain,
+    cache_scope,
+    cloud_cache_trace,
+    prefix_chain,
+)
+from .config import Config, parse_args
 from .shaping import LinkMonitor, LinkShaper
 from .telemetry import LocalResourceSampler
 from .timing import make_trace_extension
 from .trace.record import (
     TraceWriter,
+    SSEDecoder,
     build_token_accounting,
-    parse_sse,
     reassemble,
     redact_headers,
 )
@@ -91,6 +100,7 @@ def _usage_of(payload: Any) -> dict[str, Any]:
 
 def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
+    cloud_tracker = CloudCacheTracker()
 
     policy = router.build(cfg.policy)
 
@@ -145,7 +155,12 @@ def make_app(cfg: Config) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "upstream": cfg.upstream, "trace_dir": str(cfg.trace_dir)}
+        return {
+            "status": "ok",
+            "upstream": cfg.upstream,
+            "trace_dir": str(cfg.trace_dir),
+            "cloud_cache_tracking": cfg.cloud_cache_tracking,
+        }
 
     @app.api_route(
         "/{path:path}",
@@ -175,6 +190,8 @@ def make_app(cfg: Config) -> FastAPI:
         original_temperature: Any = None
         strict_tools_added = 0
         feature_dict: dict[str, Any] | None = None
+        cloud_chain: PrefixChain | None = None
+        cloud_prediction: CloudCachePrediction | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
                 session = request.headers.get("x-claude-code-session-id")
@@ -185,6 +202,31 @@ def make_app(cfg: Config) -> FastAPI:
                     gap = round(now - prev, 1) if prev is not None else None
                     last_seen[session] = now
                 features = router.extract_features(request_json, gap)
+                if cfg.cloud_cache_tracking == "observe":
+                    try:
+                        scope = cache_scope(cfg.upstream, headers)
+                        cloud_chain = prefix_chain(request_json, scope)
+                        cloud_prediction = cloud_tracker.probe(cloud_chain, started)
+                        features = replace(
+                            features,
+                            cloud_cache_state=cloud_prediction.state,
+                            estimated_cloud_cached_tokens=cloud_prediction.estimated_read_tokens,
+                            estimated_cloud_cached_fraction=(
+                                cloud_prediction.estimated_read_fraction
+                            ),
+                            cloud_cache_expires_in_s=cloud_prediction.expires_in_s,
+                            cloud_cache_prediction_confidence=(
+                                "confirmed"
+                                if cloud_prediction.state == "warm"
+                                else "conservative"
+                            ),
+                        )
+                    except Exception:
+                        # Observability must never influence placement or break
+                        # the request path.
+                        log.exception("cloud cache prediction failed (ignored)")
+                        cloud_chain = None
+                        cloud_prediction = None
                 feature_dict = asdict(features)
                 decision = policy.decide(features)
                 placement, reason, detail = decision.placement, decision.reason, decision.detail
@@ -238,6 +280,8 @@ def make_app(cfg: Config) -> FastAPI:
         }
         if placement == "local":
             record["local_resources"] = request.app.state.resource_sampler.snapshot()
+        if cloud_prediction is not None:
+            record["cloud_cache"] = cloud_cache_trace(cloud_prediction)
 
         client: httpx.AsyncClient = request.app.state.clients[placement]
         trace_ext, read_timing = make_trace_extension()
@@ -279,6 +323,7 @@ def make_app(cfg: Config) -> FastAPI:
         # send() has returned, so response headers are in and the phase stamps
         # are complete. The body has not been read yet.
         conn = read_timing()
+        response_started_at = conn.response_started_at or time.monotonic()
         net_ms = conn.network_ms
         if placement == "cloud":
             monitor.observe(net_ms)
@@ -289,6 +334,39 @@ def make_app(cfg: Config) -> FastAPI:
             **monitor.as_dict(),
         }
 
+        cloud_observation: CloudCacheObservation | None = None
+        cloud_observed = False
+
+        def observe_cloud_cache(usage: dict[str, Any]) -> None:
+            nonlocal cloud_observation, cloud_observed
+            if (
+                cloud_observed
+                or placement != "cloud"
+                or cloud_chain is None
+                or cloud_prediction is None
+            ):
+                return
+            if not (
+                "cache_read_input_tokens" in usage
+                or "cache_creation_input_tokens" in usage
+            ):
+                return
+            try:
+                cloud_observation = cloud_tracker.observe_cloud_usage(
+                    cloud_chain,
+                    cloud_prediction,
+                    request_started_at=started,
+                    response_started_at=response_started_at,
+                    status=upstream.status_code,
+                    usage=usage,
+                )
+                cloud_observed = cloud_observation.applied
+                record["cloud_cache"] = cloud_cache_trace(
+                    cloud_prediction, usage, cloud_observation
+                )
+            except Exception:
+                log.exception("cloud cache observation failed (ignored)")
+
         if not streaming:
             payload = await upstream.aread()
             await upstream.aclose()
@@ -297,6 +375,7 @@ def make_app(cfg: Config) -> FastAPI:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 parsed = None
             usage = _usage_of(parsed)
+            observe_cloud_cache(usage)
             record |= {
                 "response": parsed,
                 "usage": usage,
@@ -323,10 +402,23 @@ def make_app(cfg: Config) -> FastAPI:
             """
             accumulated = bytearray()
             ttft_ms: float | None = None
+            first_output_at: float | None = None
+            last_output_at: float | None = None
+            decoder = SSEDecoder()
+            decoded_events: list[dict[str, Any]] = []
             try:
                 async for chunk in upstream.aiter_bytes():
-                    if ttft_ms is None and b"content_block_delta" in chunk:
-                        ttft_ms = round((time.monotonic() - started) * 1000, 1)
+                    now = time.monotonic()
+                    events = decoder.feed(chunk)
+                    decoded_events.extend(events)
+                    for event in events:
+                        if event.get("type") == "message_start":
+                            observe_cloud_cache(_usage_of(event.get("message")))
+                        if event.get("type") == "content_block_delta":
+                            if first_output_at is None:
+                                first_output_at = now
+                                ttft_ms = round((now - started) * 1000, 1)
+                            last_output_at = now
                     accumulated.extend(chunk)
                     yield chunk
             except httpx.HTTPError as exc:
@@ -335,13 +427,47 @@ def make_app(cfg: Config) -> FastAPI:
             finally:
                 await upstream.aclose()
                 try:
-                    message, usage = reassemble(parse_sse(bytes(accumulated)))
+                    decoded_events.extend(decoder.finish())
+                    message, usage = reassemble(decoded_events)
+                    observe_cloud_cache(usage)
+                    output_tokens = usage.get("output_tokens")
+                    try:
+                        output_tokens = int(output_tokens)
+                    except (TypeError, ValueError):
+                        output_tokens = None
+                    output_duration_ms = (
+                        round((last_output_at - first_output_at) * 1000, 1)
+                        if first_output_at is not None and last_output_at is not None
+                        else None
+                    )
+                    tpot_ms = (
+                        round(output_duration_ms / (output_tokens - 1), 3)
+                        if output_duration_ms is not None
+                        and output_tokens is not None
+                        and output_tokens > 1
+                        else None
+                    )
+                    output_tokens_per_s = (
+                        round((output_tokens - 1) * 1000 / output_duration_ms, 3)
+                        if output_duration_ms is not None
+                        and output_duration_ms > 0
+                        and output_tokens is not None
+                        and output_tokens > 1
+                        else None
+                    )
+                    if cloud_prediction is not None:
+                        record["cloud_cache"] = cloud_cache_trace(
+                            cloud_prediction, usage, cloud_observation
+                        )
                     record.update({
                         "response": message,
                         "usage": usage,
                         "token_accounting": build_token_accounting(usage),
                         "timing": {
                             "ttft_ms": ttft_ms,
+                            "output_duration_ms": output_duration_ms,
+                            "tpot_ms": tpot_ms,
+                            "output_tokens_per_s": output_tokens_per_s,
                             "total_ms": round((time.monotonic() - started) * 1000, 1),
                             "network_ms": net_ms,
                             # Queueing + prefill, with the link taken out. This

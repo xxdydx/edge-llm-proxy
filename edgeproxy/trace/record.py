@@ -106,6 +106,40 @@ def parse_sse(raw: bytes) -> list[dict[str, Any]]:
     return events
 
 
+class SSEDecoder:
+    """Incrementally decode SSE JSON without assuming network chunk boundaries."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> list[dict[str, Any]]:
+        self._buffer.extend(chunk)
+        events: list[dict[str, Any]] = []
+        while True:
+            newline = self._buffer.find(b"\n")
+            if newline < 0:
+                break
+            line = bytes(self._buffer[:newline]).strip()
+            del self._buffer[: newline + 1]
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == b"[DONE]":
+                continue
+            try:
+                events.append(json.loads(payload))
+            except json.JSONDecodeError:
+                continue
+        return events
+
+    def finish(self) -> list[dict[str, Any]]:
+        if not self._buffer:
+            return []
+        tail = bytes(self._buffer) + b"\n"
+        self._buffer.clear()
+        return self.feed(tail)
+
+
 def reassemble(events: Iterable[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fold Anthropic stream events back into (message, usage).
 

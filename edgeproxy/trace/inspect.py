@@ -188,6 +188,65 @@ def summarise(records: list[dict[str, Any]]) -> None:
     if totals:
         print(f"total_ms         p50 {_pct(totals, .5):>8.0f}  p90 {_pct(totals, .9):>8.0f}")
 
+    tpots = [
+        r["timing"]["tpot_ms"]
+        for r in messages
+        if isinstance(r.get("timing"), dict) and r["timing"].get("tpot_ms") is not None
+    ]
+    output_rates = [
+        r["timing"]["output_tokens_per_s"]
+        for r in messages
+        if isinstance(r.get("timing"), dict)
+        and r["timing"].get("output_tokens_per_s") is not None
+    ]
+    if tpots:
+        print(f"tpot_ms          p50 {_pct(tpots, .5):>8.2f}  p90 {_pct(tpots, .9):>8.2f}")
+    if output_rates:
+        print(
+            "output_tok_s      "
+            f"p50 {_pct(output_rates, .5):>8.1f}  p90 {_pct(output_rates, .9):>8.1f}"
+        )
+
+    cache_predictions = [
+        r["cloud_cache"]
+        for r in messages
+        if isinstance(r.get("cloud_cache"), dict)
+    ]
+    scored_predictions = [
+        item
+        for item in cache_predictions
+        if (item.get("actual") or {}).get("cache_read_input_tokens") is not None
+    ]
+    if cache_predictions:
+        states = Counter(
+            (item.get("prediction") or {}).get("state", "unknown")
+            for item in cache_predictions
+        )
+        state_text = ", ".join(f"{key}={value}" for key, value in sorted(states.items()))
+        print(f"\ncloud cache shadow {state_text}")
+    if scored_predictions:
+        predicted_warm = [
+            item
+            for item in scored_predictions
+            if (item.get("prediction") or {}).get("state") == "warm"
+        ]
+        true_positive = sum(
+            int((item.get("actual") or {}).get("cache_read_input_tokens") or 0) > 0
+            for item in predicted_warm
+        )
+        actual_warm = sum(
+            int((item.get("actual") or {}).get("cache_read_input_tokens") or 0) > 0
+            for item in scored_predictions
+        )
+        precision = true_positive / len(predicted_warm) if predicted_warm else None
+        recall = true_positive / actual_warm if actual_warm else None
+        precision_text = f"{precision:.1%}" if precision is not None else "n/a"
+        recall_text = f"{recall:.1%}" if recall is not None else "n/a"
+        print(
+            f"  provider-scored {len(scored_predictions):,}  "
+            f"warm precision {precision_text}  recall {recall_text}"
+        )
+
     systems = [s for s in (_system_text(r.get("request")) for r in messages) if s]
     if systems:
         shared = common_prefix(systems)

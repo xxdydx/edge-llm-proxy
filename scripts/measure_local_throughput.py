@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Measure local vLLM latency and throughput across a controlled matrix.
+"""Measure edge vLLM latency, TPOT, and throughput across a controlled matrix.
 
 The benchmark varies input length, requested output length, concurrency, and
 cold/full-warm prefix state. It writes one raw row per request and one summary
 row per condition. Cache state is checked from vLLM prefix-cache counter deltas.
+``scripts/edge_tpot.py`` is the canonical user-facing entry point; this module
+retains the original name for compatibility and contains the implementation.
 
 This is a serving-performance benchmark, not a quality benchmark. Prompts are
 expanded to exact token lengths and ``ignore_eos`` forces the requested decode
@@ -66,6 +68,7 @@ class RequestResult:
     last_token_ms: float | None = None
     e2e_ms: float | None = None
     decode_ms: float | None = None
+    tpot_ms: float | None = None
     decode_tokens_per_s: float | None = None
     error: str = ""
 
@@ -254,9 +257,9 @@ async def measure_request(
         result.last_token_ms = (last_token_at - started) * 1000
     if first_token_at is not None and last_token_at is not None:
         result.decode_ms = max(0.0, (last_token_at - first_token_at) * 1000)
-        decode_tokens = max(0, result.output_tokens - 1)
-        if result.decode_ms > 0 and decode_tokens > 0:
-            result.decode_tokens_per_s = decode_tokens / (result.decode_ms / 1000)
+        result.tpot_ms = calculate_tpot_ms(result.decode_ms, result.output_tokens)
+        if result.tpot_ms is not None:
+            result.decode_tokens_per_s = 1000 / result.tpot_ms
     if result.status == 200 and result.output_tokens == 0 and not result.error:
         result.error = "stream completed without countable output tokens"
     return result
@@ -272,6 +275,19 @@ def percentile(values: list[float], fraction: float) -> float:
     if low == high:
         return ordered[low]
     return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def calculate_tpot_ms(decode_ms: float | None, output_tokens: int) -> float | None:
+    """Return mean time between generated tokens after the first token.
+
+    TTFT ends when token one arrives. The remaining ``output_tokens - 1``
+    inter-token intervals make up decode time, so a one-token response has no
+    defined TPOT rather than a misleading zero.
+    """
+    decode_tokens = output_tokens - 1
+    if decode_ms is None or decode_ms <= 0 or decode_tokens <= 0:
+        return None
+    return decode_ms / decode_tokens
 
 
 def optional_round(value: float | None) -> float | str:
@@ -291,6 +307,7 @@ def write_summary(output: Path, rows: list[dict[str, Any]]) -> Path:
         grouped.setdefault(key, []).append(row)
 
     fields = [
+        "backend",
         "prompt_tokens",
         "requested_output_tokens",
         "concurrency",
@@ -302,6 +319,8 @@ def write_summary(output: Path, rows: list[dict[str, Any]]) -> Path:
         "total_requests",
         "median_ttft_ms",
         "p90_ttft_ms",
+        "median_tpot_ms",
+        "p90_tpot_ms",
         "median_e2e_ms",
         "p90_e2e_ms",
         "median_request_decode_tokens_per_s",
@@ -322,11 +341,13 @@ def write_summary(output: Path, rows: list[dict[str, Any]]) -> Path:
                 for row in valid
                 if row["decode_tokens_per_s"] != ""
             ]
+            tpots = [float(row["tpot_ms"]) for row in valid if row["tpot_ms"] != ""]
             batches = {str(row["batch_id"]): row for row in group}.values()
             batch_rates = [float(row["batch_output_tokens_per_s"]) for row in batches]
             cache_fractions = [float(row["realized_cached_fraction"]) for row in batches]
             writer.writerow(
                 {
+                    "backend": "edge",
                     "prompt_tokens": key[0],
                     "requested_output_tokens": key[1],
                     "concurrency": key[2],
@@ -340,6 +361,12 @@ def write_summary(output: Path, rows: list[dict[str, Any]]) -> Path:
                     "total_requests": len(group),
                     "median_ttft_ms": optional_round(statistics.median(ttfts) if ttfts else None),
                     "p90_ttft_ms": optional_round(percentile(ttfts, 0.9) if ttfts else None),
+                    "median_tpot_ms": optional_round(
+                        statistics.median(tpots) if tpots else None
+                    ),
+                    "p90_tpot_ms": optional_round(
+                        percentile(tpots, 0.9) if tpots else None
+                    ),
                     "median_e2e_ms": optional_round(statistics.median(e2es) if e2es else None),
                     "p90_e2e_ms": optional_round(percentile(e2es, 0.9) if e2es else None),
                     "median_request_decode_tokens_per_s": optional_round(
@@ -421,6 +448,7 @@ async def run(args: argparse.Namespace) -> int:
         random.Random(args.seed).shuffle(conditions)
 
         raw_fields = [
+            "backend",
             "timestamp_utc",
             "batch_id",
             "vllm_version",
@@ -443,6 +471,7 @@ async def run(args: argparse.Namespace) -> int:
             "ttft_ms",
             "last_token_ms",
             "decode_ms",
+            "tpot_ms",
             "decode_tokens_per_s",
             "e2e_ms",
             "batch_wall_ms",
@@ -517,6 +546,7 @@ async def run(args: argparse.Namespace) -> int:
                 batch_id = f"batch-{condition_number:04d}"
                 for result in results:
                     row = {
+                        "backend": "edge",
                         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                         "batch_id": batch_id,
                         "vllm_version": version,
@@ -539,6 +569,7 @@ async def run(args: argparse.Namespace) -> int:
                         "ttft_ms": optional_round(result.ttft_ms),
                         "last_token_ms": optional_round(result.last_token_ms),
                         "decode_ms": optional_round(result.decode_ms),
+                        "tpot_ms": optional_round(result.tpot_ms),
                         "decode_tokens_per_s": optional_round(
                             result.decode_tokens_per_s
                         ),

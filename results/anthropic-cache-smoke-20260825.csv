@@ -1,0 +1,3 @@
+timestamp_utc,condition,repetition,requested_model,response_model,anthropic_backend,target_prefix_tokens,status,prediction_state,prediction_reason,estimated_cache_read_tokens,cache_read_input_tokens,cache_creation_input_tokens,uncached_input_tokens,total_input_tokens,output_tokens,ttft_ms,tpot_ms,total_ms,connect_ms,response_headers_ms,diagnostics,valid
+2026-08-25T13:18:47.088077+00:00,cold,0,claude-sonnet-5,deepseek-v4-flash,False,2048,200,unknown,first-seen,,,,,0,577,491.607,23.612,14091.4,,11.84,,False
+2026-08-25T13:18:53.123633+00:00,warm,0,claude-sonnet-5,deepseek-v4-flash,False,2048,200,unknown,first-seen,,,,,0,183,811.742,28.682,6031.3,,18.72,,False

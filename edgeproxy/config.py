@@ -32,6 +32,7 @@ class Config:
     resource_sample_interval_s: float
     gpu_index: int
     kv_bytes_per_token: int | None
+    cloud_cache_tracking: str
 
     @property
     def backends(self) -> dict[str, str]:
@@ -91,6 +92,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="model KV bytes/token, used to estimate occupied KV-cache GiB",
     )
     p.add_argument(
+        "--cloud-cache-tracking",
+        default=env("EDGEPROXY_CLOUD_CACHE_TRACKING", "off"),
+        choices=["off", "observe"],
+        help="predict Anthropic prompt-cache residency without changing placement",
+    )
+    p.add_argument(
         "--shaping",
         default=env("EDGEPROXY_SHAPING", "proxy"),
         choices=["proxy", "netem", "none"],
@@ -129,4 +136,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         resource_sample_interval_s=max(a.resource_sample_interval_s, 0.1),
         gpu_index=a.gpu_index,
         kv_bytes_per_token=a.kv_bytes_per_token,
+        cloud_cache_tracking=a.cloud_cache_tracking,
     )

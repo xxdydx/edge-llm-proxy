@@ -65,6 +65,42 @@ Traces land in `traces/YYYY-MM-DD.jsonl`.
 kill $(cat logs/proxy.pid)                                   # stop
 ```
 
+### Observe Anthropic prompt-cache state
+
+The cloud-cache shadow is opt-in and cannot affect routing:
+
+```bash
+.venv/bin/python -m edgeproxy.server \
+  --port 8765 \
+  --policy cloud-only \
+  --cloud-cache-tracking observe
+```
+
+Each `/v1/messages` trace then includes `cloud_cache.prediction`, provider
+cache usage, and prediction agreement. A confirmed cache read refreshes the
+shadow TTL; a prediction by itself never does. State is in memory and returns
+to `unknown` after a proxy restart.
+
+Run the smallest real-cloud validation from the laptop with:
+
+```bash
+.venv/bin/python scripts/measure_anthropic_cache.py \
+  --suite smoke \
+  --model claude-sonnet-5 \
+  --prefix-tokens 2048 \
+  --max-input-token-budget 10000 \
+  --confirm-live
+```
+
+The runner loads the existing `.env`, starts an isolated cloud-only proxy,
+uses the Count Tokens endpoint to size the prefix, and sends a cold/warm pair.
+`--confirm-live` is mandatory because this incurs real upstream calls. A valid
+cache result requires the response to expose Anthropic's
+`cache_read_input_tokens` / `cache_creation_input_tokens`; an Anthropic-
+compatible backend without those fields is reported as invalid rather than as
+a cache miss. Use `--help` for correctness, performance, TTL, cost-cap, and
+diagnostics options.
+
 ## Running Claude Code against the local model
 
 On the box, once `bootstrap.sh` has vLLM up:
@@ -338,40 +374,43 @@ individual request. Confirm the running command contains
 `--enable-prompt-tokens-details` if the usage fields are absent; setting a flag
 after vLLM has started cannot change that process.
 
-### Local latency and throughput benchmark
+### Edge latency, TPOT, and throughput benchmark
 
-`scripts/measure_local_throughput.py` drives vLLM directly so proxy and cloud
-effects do not contaminate the local-engine measurement. `prompts.txt` supplies
-three fixed prompt seeds. The runner expands them to exact token lengths and
-sweeps prompt length, output length, concurrency, and cold/warm prefix state.
+`scripts/edge_tpot.py` drives vLLM directly so proxy and cloud effects do not
+contaminate the edge-engine measurement. `prompts.txt` supplies three fixed
+prompt seeds. The runner expands them to exact token lengths and sweeps prompt
+length, output length, concurrency, and cold/warm prefix state. The older
+`measure_local_throughput.py` entry point remains available for compatibility.
 
 Start with a short smoke test:
 
 ```bash
-/opt/venv/bin/python scripts/measure_local_throughput.py \
+/opt/venv/bin/python scripts/edge_tpot.py \
   --tokenizer Qwen/Qwen2.5-7B-Instruct-AWQ \
   --prompt-lengths 1024 \
   --output-lengths 128 \
   --concurrency 1,2 \
   --cache-states cold,warm \
   --repetitions 1 \
-  --output results/local-throughput-smoke.csv
+  --output results/edge-tpot-smoke.csv
 ```
 
 Then run the declared full matrix (1K/8K/24K prompts, 128/512/2048 outputs,
 concurrency 1/2/4/8, cold/warm, three repetitions):
 
 ```bash
-/opt/venv/bin/python scripts/measure_local_throughput.py \
+/opt/venv/bin/python scripts/edge_tpot.py \
   --tokenizer Qwen/Qwen2.5-7B-Instruct-AWQ \
-  --output results/local-throughput-full.csv
+  --output results/edge-tpot-full.csv
 ```
 
-The raw CSV has one row per request. The derived `-summary.csv` reports p50/p90
-TTFT and end-to-end latency, per-request post-first-token decode speed, aggregate
-batch throughput, realized cache fraction, and cache-state validity. A requested
-warm condition may be invalid under eviction pressure; the runner records the
-actual vLLM counter delta instead of assuming a hit.
+The raw CSV has one row per request and labels it `backend=edge`. TPOT is
+`decode_ms / (output_tokens - 1)`: the first token belongs to TTFT, leaving one
+inter-token interval for every subsequent token. The derived `-summary.csv`
+reports p50/p90 TTFT, TPOT, and end-to-end latency, per-request decode speed,
+aggregate batch throughput, realized cache fraction, and cache-state validity.
+A requested warm condition may be invalid under eviction pressure; the runner
+records the actual vLLM counter delta instead of assuming a hit.
 
 The benchmark requires vLLM's cache-reset route. In vLLM 0.27 it is a
 development-only endpoint, so vLLM must have been started with:

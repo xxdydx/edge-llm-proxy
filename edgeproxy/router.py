@@ -37,6 +37,13 @@ class CallFeatures:
     # properties of the request body, so they are recoverable from any trace.
     cloud_cache_ttl_s: float | None = None
     n_cache_breakpoints: int = 0
+    # Observe-only cloud cache estimates. Current policies deliberately ignore
+    # these until live validation supports a separate promotion decision.
+    cloud_cache_state: str | None = None
+    estimated_cloud_cached_tokens: int | None = None
+    estimated_cloud_cached_fraction: float | None = None
+    cloud_cache_expires_in_s: float | None = None
+    cloud_cache_prediction_confidence: str | None = None
 
 
 def _text_len(content: Any) -> int:

@@ -1,0 +1,2 @@
+target_prefix_tokens,condition,valid_samples,total_samples,median_ttft_ms,median_tpot_ms,cache_hit_samples,median_cache_read_tokens
+2048,cold,0,1,,,0,

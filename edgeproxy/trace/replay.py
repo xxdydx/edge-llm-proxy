@@ -14,10 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
 from .. import router
+from ..cloud_cache import CloudCacheTracker, cache_scope, prefix_chain
 from .inspect import load
 
 
@@ -58,6 +60,85 @@ def features_for(
     if use_recorded and isinstance(record.get("features"), dict):
         return router.CallFeatures(**record["features"])
     return router.extract_features(record["request"], gap)
+
+
+def reconstruct_cloud_cache(
+    records: list[dict[str, Any]], feats: list[router.CallFeatures]
+) -> tuple[list[router.CallFeatures], dict[str, Any]]:
+    """Rebuild only the cloud history that actually occurred in the trace."""
+    tracker = CloudCacheTracker()
+    states: Counter[str] = Counter()
+    classified = true_positive = false_positive = actual_warm = 0
+    token_errors: list[int] = []
+    token_percentage_errors: list[float] = []
+    lineages: set[str] = set()
+    out: list[router.CallFeatures] = []
+    # Redacted traces do not retain the credential, and local-placement rows
+    # store the local backend URL. Use one opaque recorded-cloud namespace so a
+    # local call can still receive the counterfactual cloud-cache prediction.
+    replay_scope = cache_scope("replay://recorded-cloud", {})
+    for record, feature in zip(records, feats):
+        now = float(record.get("ts") or 0.0)
+        chain = prefix_chain(record["request"], replay_scope)
+        prediction = tracker.probe(chain, now)
+        lineages.add(chain.lineage_key)
+        states[prediction.state] += 1
+        out.append(
+            replace(
+                feature,
+                cloud_cache_state=prediction.state,
+                estimated_cloud_cached_tokens=prediction.estimated_read_tokens,
+                estimated_cloud_cached_fraction=prediction.estimated_read_fraction,
+                cloud_cache_expires_in_s=prediction.expires_in_s,
+                cloud_cache_prediction_confidence=(
+                    "confirmed" if prediction.state == "warm" else "conservative"
+                ),
+            )
+        )
+        if record.get("placement") != "cloud":
+            continue
+        usage = record.get("usage") or {}
+        if "cache_read_input_tokens" in usage:
+            classified += 1
+            read = int(usage.get("cache_read_input_tokens") or 0)
+            is_warm = read > 0
+            actual_warm += is_warm
+            true_positive += prediction.state == "warm" and is_warm
+            false_positive += prediction.state == "warm" and not is_warm
+            if prediction.estimated_read_tokens is not None:
+                token_errors.append(abs(prediction.estimated_read_tokens - read))
+                if read > 0:
+                    token_percentage_errors.append(
+                        abs(prediction.estimated_read_tokens - read) / read * 100
+                    )
+        timing = record.get("timing") or {}
+        ttft_s = float(timing.get("ttft_ms") or 0.0) / 1000.0
+        tracker.observe_cloud_usage(
+            chain,
+            prediction,
+            request_started_at=now,
+            response_started_at=now + ttft_s,
+            status=int(record.get("status") or 0),
+            usage=usage,
+        )
+    predicted_warm = true_positive + false_positive
+    metrics = {
+        "states": states,
+        "classified": classified,
+        "distinct_lineages": len(lineages),
+        "warm_precision": true_positive / predicted_warm if predicted_warm else None,
+        "warm_recall": true_positive / actual_warm if actual_warm else None,
+        "mean_absolute_token_error": (
+            sum(token_errors) / len(token_errors) if token_errors else None
+        ),
+        "token_error_samples": len(token_errors),
+        "mean_absolute_percentage_error": (
+            sum(token_percentage_errors) / len(token_percentage_errors)
+            if token_percentage_errors
+            else None
+        ),
+    }
+    return out, metrics
 
 
 def build_policy(name: str, cap: int, clamp: int | None, tools: bool) -> router.Policy:
@@ -146,6 +227,11 @@ def main() -> None:
     ap.add_argument("--check", action="store_true", help="confusion matrix only")
     ap.add_argument("--out", type=Path, help="write per-call decisions as JSONL")
     ap.add_argument("--use-recorded-features", action="store_true")
+    ap.add_argument(
+        "--cloud-cache-observe",
+        action="store_true",
+        help="reconstruct provider-confirmed cloud cache state in timestamp order",
+    )
     args = ap.parse_args()
 
     existing = [p for p in args.paths if p.exists()]
@@ -160,6 +246,30 @@ def main() -> None:
     feats = [
         features_for(r, args.use_recorded_features, g) for r, g in zip(records, gaps)
     ]
+    if args.cloud_cache_observe:
+        feats, cache_metrics = reconstruct_cloud_cache(records, feats)
+        states = cache_metrics["states"]
+        print(
+            "  cloud cache tracker: "
+            + ", ".join(f"{state}={count}" for state, count in sorted(states.items()))
+        )
+        precision = cache_metrics["warm_precision"]
+        recall = cache_metrics["warm_recall"]
+        mae = cache_metrics["mean_absolute_token_error"]
+        mape = cache_metrics["mean_absolute_percentage_error"]
+        precision_label = f"{precision:.3f}" if precision is not None else "n/a"
+        recall_label = f"{recall:.3f}" if recall is not None else "n/a"
+        mae_label = f"{mae:.1f}" if mae is not None else "n/a"
+        print(
+            f"    provider-scored={cache_metrics['classified']} "
+            f"precision={precision_label} recall={recall_label} "
+            f"cached-token-MAE={mae_label} n={cache_metrics['token_error_samples']}"
+        )
+        if mape is not None:
+            print(
+                f"    cached-token-MAPE={mape:.2f}% "
+                f"distinct-lineages={cache_metrics['distinct_lineages']}"
+            )
     print(f"{len(records)} calls from {len(existing)} file(s)")
 
     # TTL is per-request, so each call is compared against its own, not a

@@ -1,0 +1,2 @@
+timestamp_utc,condition,repetition,requested_model,response_model,anthropic_backend,target_prefix_tokens,status,prediction_state,prediction_reason,estimated_cache_read_tokens,cache_read_input_tokens,cache_creation_input_tokens,uncached_input_tokens,total_input_tokens,output_tokens,ttft_ms,tpot_ms,total_ms,connect_ms,response_headers_ms,diagnostics,valid
+2026-08-25T13:47:06.915381+00:00,cold,0,claude-sonnet-4-5-20250929,deepseek-v4-flash,False,2048,200,unknown,first-seen,,,,,0,205,497.782,62.415,13230.1,,11.88,,False

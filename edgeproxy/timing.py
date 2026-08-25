@@ -26,6 +26,9 @@ class ConnTiming:
     tls_ms: float | None = None
     send_ms: float | None = None
     response_headers_ms: float | None = None
+    # Absolute monotonic timestamp used for cache-write admission. It is not
+    # serialized into traces because it has meaning only within this process.
+    response_started_at: float | None = None
 
     @property
     def network_ms(self) -> float | None:
@@ -78,6 +81,7 @@ def make_trace_extension() -> tuple[dict[str, Any], Callable[[], ConnTiming]]:
                 values[field] = round((stamps[end] - stamps[start]) * 1000, 2)
             else:
                 values[field] = None
+        values["response_started_at"] = stamps.get("http11.receive_response_headers.complete")
         return ConnTiming(**values)  # type: ignore[arg-type]
 
     return {"trace": trace}, read

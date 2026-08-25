@@ -2,7 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.measure_local_throughput import exact_prompt_tokens, load_prompts, percentile
+from scripts.measure_local_throughput import (
+    calculate_tpot_ms,
+    exact_prompt_tokens,
+    load_prompts,
+    percentile,
+)
 
 
 class FakeTokenizer:
@@ -35,6 +40,11 @@ class LocalThroughputHelpersTests(unittest.TestCase):
 
     def test_percentile_interpolates(self):
         self.assertEqual(percentile([10.0, 20.0], 0.9), 19.0)
+
+    def test_tpot_uses_intervals_after_first_token(self):
+        self.assertEqual(calculate_tpot_ms(1270.0, 128), 10.0)
+        self.assertIsNone(calculate_tpot_ms(0.0, 128))
+        self.assertIsNone(calculate_tpot_ms(10.0, 1))
 
     def test_exact_prompt_length_and_unique_first_cache_block(self):
         tokenizer = FakeTokenizer()
