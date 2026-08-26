@@ -105,7 +105,11 @@ def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
     cloud_tracker = CloudCacheTracker()
 
-    policy = router.build(cfg.policy)
+    policy = router.build(
+        cfg.policy,
+        max_local_tokens=cfg.max_local_tokens,
+        margin=cfg.local_token_margin,
+    )
 
     # `netem` means shaping happens outside this process; we record the claim
     # but must not also apply it, or the delay would be counted twice.
@@ -164,6 +168,11 @@ def make_app(cfg: Config) -> FastAPI:
             "trace_dir": str(cfg.trace_dir),
             "cloud_cache_tracking": cfg.cloud_cache_tracking,
             "local_cache_tracking": cfg.local_cache_tracking,
+            "max_local_tokens": cfg.max_local_tokens,
+            "local_token_margin": cfg.local_token_margin,
+            "effective_local_token_budget": int(
+                cfg.max_local_tokens * cfg.local_token_margin
+            ),
         }
 
     @app.api_route(

@@ -7,11 +7,49 @@
 # This means uncommitted implementation work reaches each disposable box while
 # secrets, traces, results, logs, and the private memory layer do not.
 #
-#   ./flowmesh-up.sh
+#   ./flowmesh-up.sh --setup qwen25-7b
+#   ./flowmesh-up.sh --setup qwen38-27b
 #
 set -euo pipefail
 
-WORKFLOW="${WORKFLOW:-ssh-workflow.yaml}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETUP_NAME="${FLOWMESH_SETUP:-qwen25-7b}"
+TUNNEL_ONLY=0
+PRINT_CONFIG=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --setup)
+      [ "$#" -ge 2 ] || { echo "[x] --setup requires a name" >&2; exit 2; }
+      SETUP_NAME="$2"; shift 2 ;;
+    --tunnel-only)
+      TUNNEL_ONLY=1; shift ;;
+    --print-config)
+      PRINT_CONFIG=1; shift ;;
+    -h|--help)
+      cat <<'EOF'
+usage: ./flowmesh-up.sh [--setup NAME] [--print-config] [--tunnel-only]
+
+setups: qwen25-7b | qwen38-27b
+EOF
+      exit 0 ;;
+    *) echo "[x] unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+case "$SETUP_NAME" in
+  qwen25-7b|qwen38-27b) ;;
+  *) echo "[x] unknown setup '$SETUP_NAME' (qwen25-7b | qwen38-27b)" >&2; exit 2 ;;
+esac
+SETUP_FILE="$SCRIPT_DIR/setups/$SETUP_NAME.env"
+[ -f "$SETUP_FILE" ] || { echo "[x] setup file missing: $SETUP_FILE" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$SETUP_FILE"
+
+WORKFLOW="${WORKFLOW:-$FLOWMESH_WORKFLOW}"
+SSH_ALIAS="${FLOWMESH_SSH_ALIAS:-fmbox-$SETUP_NAME}"
+TUNNEL_NAME="${FLOWMESH_TUNNEL_NAME:-flowmesh-$SETUP_NAME}"
+EXPERIMENT_NAMESPACE="${EXPERIMENT_NAMESPACE:-$SETUP_NAME}"
 REPO_URL="${REPO_URL:-https://github.com/xxdydx/edge-llm-proxy}"
 REPO_DIR_NAME="edge-llm-proxy-main"
 SOURCE_MODE="${SOURCE_MODE:-local}"  # local (default) or github
@@ -23,6 +61,34 @@ VLLM_SERVER_DEV_MODE="${VLLM_SERVER_DEV_MODE:-1}"
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+
+print_config() {
+  cat <<EOF
+setup=$SETUP_NAME
+workflow=$WORKFLOW
+ssh_alias=$SSH_ALIAS
+tunnel_name=$TUNNEL_NAME
+experiment_namespace=$EXPERIMENT_NAMESPACE
+model=$MODEL
+tool_call_parser=$TOOL_CALL_PARSER
+reasoning_parser=${REASONING_PARSER:-none}
+quantization=${QUANTIZATION:-none}
+language_model_only=$LANGUAGE_MODEL_ONLY
+max_model_len=$MAX_MODEL_LEN
+native_max_model_len=$NATIVE_MAX_MODEL_LEN
+attention_backend=$ATTENTION_BACKEND
+kv_cache_dtype=$KV_CACHE_DTYPE
+gpu_mem_util=$GPU_MEM_UTIL
+vllm_extra_args=${VLLM_EXTRA_ARGS:-none}
+edgeproxy_max_local_tokens=${EDGEPROXY_MAX_LOCAL_TOKENS:-60000}
+edgeproxy_local_token_margin=${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}
+EOF
+}
+
+if [ "$PRINT_CONFIG" -eq 1 ]; then
+  print_config
+  exit 0
+fi
 
 # ------------------------------------------------------------- vs code ------
 # Remote-SSH cannot work here: the FlowMesh entrypoint writes
@@ -75,12 +141,12 @@ vscode_tunnel() {
       ssh_run 'CLI=$(ls ~/code ~/.vscode-server/code-* 2>/dev/null | head -1)
         tmux kill-session -t tunnel 2>/dev/null || true
         rm -f ~/tunnel.log
-        tmux new -d -s tunnel "$CLI tunnel --accept-server-license-terms --name fmbox >~/tunnel.log 2>&1"'
+        tmux new -d -s tunnel "$CLI tunnel --accept-server-license-terms --name '"$TUNNEL_NAME"' >~/tunnel.log 2>&1"'
       tunnel_started=1
     fi
 
     if ssh_run 'grep -qi "devtunnels.ms\|Open:" ~/tunnel.log 2>/dev/null'; then
-      log "tunnel is up: https://vscode.dev/tunnel/fmbox"
+      log "tunnel is up: https://vscode.dev/tunnel/$TUNNEL_NAME"
       return 0
     fi
 
@@ -95,23 +161,20 @@ vscode_tunnel() {
     sleep 3; waited=$((waited + 3))
   done
 
-  warn "tunnel did not come up in ${waited}s — check: ssh fmbox 'cat ~/tunnel.log'"
+  warn "tunnel did not come up in ${waited}s — check: ssh $SSH_ALIAS 'cat ~/tunnel.log'"
   return 1
 }
 
-# `--tunnel-only`: the devbox from an earlier run of this script is still up,
+# `--tunnel-only`: the devbox from an earlier run of this setup is still up,
 # but the 300s login window in vscode_tunnel closed before you got to the
-# device-code prompt. This re-runs just the tunnel dance against the fmbox
-# ssh alias already sitting in ~/.ssh/config — no workflow resubmit, no
+# device-code prompt. This re-runs just the tunnel dance against the setup's
+# SSH alias already sitting in ~/.ssh/config — no workflow resubmit, no
 # re-running the 15-minute bootstrap.
-TUNNEL_ONLY=0
-[ "${1:-}" = "--tunnel-only" ] && TUNNEL_ONLY=1
-
 if [ "$TUNNEL_ONLY" -eq 1 ]; then
-  ssh -o BatchMode=yes -o ConnectTimeout=10 fmbox true 2>/dev/null \
-    || die "fmbox isn't reachable — is the devbox still up? (flowmesh task list)"
-  ssh_run() { ssh fmbox "$@"; }
-  vscode_tunnel && log "tunnel ready: https://vscode.dev/tunnel/fmbox"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_ALIAS" true 2>/dev/null \
+    || die "$SSH_ALIAS isn't reachable — is that setup's devbox still up?"
+  ssh_run() { ssh "$SSH_ALIAS" "$@"; }
+  vscode_tunnel && log "tunnel ready: https://vscode.dev/tunnel/$TUNNEL_NAME"
   exit $?
 fi
 
@@ -157,6 +220,7 @@ fi
 
 # ------------------------------------------------------------------ submit --
 
+log "setup: $SETUP_NAME | workflow: $WORKFLOW | model: $MODEL"
 log "submitting $WORKFLOW"
 SUBMIT_OUT="$(flowmesh workflow submit "$WORKFLOW")"
 echo "$SUBMIT_OUT"
@@ -254,21 +318,34 @@ ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$@"; }
 
 # ------------------------------------------------------------ ssh config ----
 # The session port changes every time, so anything that wants a stable name —
-# VS Code Remote-SSH, scp, rsync, plain `ssh fmbox` — needs ~/.ssh/config
+# VS Code Remote-SSH, scp, rsync, and plain SSH need ~/.ssh/config
 # rewritten each run. Keep it inside markers so we replace our own block and
 # leave the rest of the user's config alone.
-update_ssh_config() {
+update_ssh_config() (
   local cfg="$HOME/.ssh/config"
-  local begin="# >>> flowmesh-up >>>" end="# <<< flowmesh-up <<<"
+  local begin="# >>> flowmesh-up:$SETUP_NAME >>>" end="# <<< flowmesh-up:$SETUP_NAME <<<"
+  local legacy_begin="# >>> flowmesh-up >>>" legacy_end="# <<< flowmesh-up <<<"
+  local lock="$HOME/.ssh/.flowmesh-up-config.lock" tmp="" waited=0
   mkdir -p "$HOME/.ssh"; touch "$cfg"
 
-  awk -v b="$begin" -v e="$end" '
-    $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }
-  ' "$cfg" > "$cfg.tmp"
+  # Two setup launchers may reach this function together. mkdir is atomic on
+  # macOS, so use it as a small dependency-free lock around the read/replace.
+  until mkdir "$lock" 2>/dev/null; do
+    sleep 0.1; waited=$((waited + 1))
+    [ "$waited" -lt 300 ] || die "timed out locking $cfg"
+  done
+  trap '[ -n "$tmp" ] && rm -f "$tmp"; rmdir "$lock" 2>/dev/null || true' EXIT
+  tmp="$(mktemp "$HOME/.ssh/config.flowmesh.XXXXXX")"
+
+  awk -v b="$begin" -v e="$end" -v lb="$legacy_begin" -v le="$legacy_end" '
+    $0 == b || $0 == lb { skip = 1; next }
+    skip && ($0 == e || $0 == le) { skip = 0; next }
+    !skip { print }
+  ' "$cfg" > "$tmp"
 
   {
     echo "$begin"
-    echo "Host fmbox"
+    echo "Host $SSH_ALIAS"
     echo "    HostName ${SSH_TARGET#*@}"
     echo "    User ${SSH_TARGET%@*}"
     if [ "$SSH_MODE" = proxy ]; then
@@ -283,11 +360,11 @@ update_ssh_config() {
     ServerAliveInterval 30
 $end
 EOF
-  } >> "$cfg.tmp"
+  } >> "$tmp"
 
-  mv "$cfg.tmp" "$cfg"; chmod 600 "$cfg"
-  log "ssh alias 'fmbox' written to $cfg"
-}
+  mv "$tmp" "$cfg"; tmp=""; chmod 600 "$cfg"
+  log "ssh alias '$SSH_ALIAS' written to $cfg"
+)
 update_ssh_config
 
 # A freshly-ready session can still be a beat away from accepting SSH.
@@ -345,7 +422,7 @@ tar -xzf "$REMOTE_SOURCE_ARCHIVE" -C "$REPO_DIR_NAME"
 rm -f "$REMOTE_SOURCE_ARCHIVE"
 if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
 cd "$REPO_DIR_NAME"
-VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh
+VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh --setup "$SETUP_NAME"
 REMOTE
 else
   ssh_run bash -s <<REMOTE
@@ -355,37 +432,39 @@ rm -rf "$REPO_DIR_NAME"
 curl -sL "$REPO_URL/archive/refs/heads/main.tar.gz" | tar xz
 if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
 cd "$REPO_DIR_NAME"
-VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh
+VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh --setup "$SETUP_NAME"
 REMOTE
 fi
 
 if [ -x "$CODE_BIN" ]; then
   log "opening VS Code on the box"
-  "$CODE_BIN" --folder-uri "vscode-remote://tunnel+fmbox$REMOTE_FOLDER" || true
+  "$CODE_BIN" --folder-uri "vscode-remote://tunnel+$TUNNEL_NAME$REMOTE_FOLDER" || true
 else
-  warn "open manually: vscode://vscode-remote/tunnel+fmbox$REMOTE_FOLDER"
+  warn "open manually: vscode://vscode-remote/tunnel+$TUNNEL_NAME$REMOTE_FOLDER"
 fi
 
 if [ "$TUNNEL_OK" -eq 1 ]; then
-  VSCODE_HINT="    vs code      https://vscode.dev/tunnel/fmbox
-                 (Remote Explorer -> Tunnels -> fmbox; NOT the SSH entry)"
+  VSCODE_HINT="    vs code      https://vscode.dev/tunnel/$TUNNEL_NAME
+                 (Remote Explorer -> Tunnels -> $TUNNEL_NAME; NOT the SSH entry)"
 else
-  VSCODE_HINT="    vs code      not authenticated — run: ./flowmesh-up.sh --tunnel-only
-                 (if that hangs too, check: ssh fmbox 'cat ~/tunnel.log')"
+  VSCODE_HINT="    vs code      not authenticated — run: ./flowmesh-up.sh --setup $SETUP_NAME --tunnel-only
+                 (if that hangs too, check: ssh $SSH_ALIAS 'cat ~/tunnel.log')"
 fi
 
 cat <<EOF
 
   done.
 
+    setup      $SETUP_NAME
     task id    $TASK_ID
     reconnect  flowmesh ssh connect $TASK_ID
     stop       flowmesh task stop $TASK_ID
 
-    shell        ssh fmbox
+    shell        ssh $SSH_ALIAS
 $VSCODE_HINT
-    copy files   scp fmbox:~/$REPO_DIR_NAME/results/* ./results/
-    tunnel logs  ssh fmbox 'tmux attach -t tunnel'
+    copy results scp -r $SSH_ALIAS:~/$REPO_DIR_NAME/results/$EXPERIMENT_NAMESPACE ./results/
+    copy traces  scp -r $SSH_ALIAS:~/$REPO_DIR_NAME/traces/$EXPERIMENT_NAMESPACE ./traces/
+    tunnel logs  ssh $SSH_ALIAS 'tmux attach -t tunnel'
 
   Leave this running. Ctrl+C stops the task and releases the GPU.
 

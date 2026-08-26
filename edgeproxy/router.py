@@ -261,8 +261,16 @@ POLICIES: dict[str, type] = {
 }
 
 
-def build(name: str) -> Policy:
+def build(
+    name: str,
+    *,
+    max_local_tokens: int = 60_000,
+    margin: float = 0.9,
+) -> Policy:
     try:
-        return POLICIES[name]()
+        policy_type = POLICIES[name]
     except KeyError:
         raise SystemExit(f"unknown policy {name!r} — one of: {', '.join(POLICIES)}")
+    if policy_type is StaticPolicy:
+        return StaticPolicy(max_local_tokens=max_local_tokens, margin=margin)
+    return policy_type()

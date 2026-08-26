@@ -19,11 +19,58 @@
 #   serve    launch vLLM + edgeproxy, wait healthy ~2min
 #
 # Examples:
-#   ./bootstrap.sh check          # just the day-one sm_120 risk check
-#   ./bootstrap.sh                # everything
-#   MODEL=Qwen/Qwen3-8B-AWQ ./bootstrap.sh
+#   ./bootstrap.sh check                         # default 7B setup
+#   ./bootstrap.sh --setup qwen38-27b            # complete 27B setup
+#   ./bootstrap.sh --setup qwen38-27b check      # inspect its GPU environment
+#   ./bootstrap.sh --setup qwen38-27b --print-config
 #
 set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SETUP_NAME="${FLOWMESH_SETUP:-qwen25-7b}"
+PHASE="all"
+PRINT_CONFIG=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --setup)
+      [ "$#" -ge 2 ] || { echo "[x] --setup requires a name" >&2; exit 2; }
+      SETUP_NAME="$2"; shift 2 ;;
+    --print-config)
+      PRINT_CONFIG=1; shift ;;
+    check|install|model|harness|serve|all)
+      PHASE="$1"; shift ;;
+    -h|--help)
+      cat <<'EOF'
+usage: ./bootstrap.sh [--setup NAME] [--print-config] [check|install|model|harness|serve|all]
+
+setups: qwen25-7b | qwen38-27b
+EOF
+      exit 0 ;;
+    *) echo "[x] unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+case "$SETUP_NAME" in
+  qwen25-7b|qwen38-27b) ;;
+  *) echo "[x] unknown setup '$SETUP_NAME' (qwen25-7b | qwen38-27b)" >&2; exit 2 ;;
+esac
+
+# Secrets and machine-local overrides remain in .env. Load them before the
+# public setup profile so profile assignments can use ${VAR:-default}: an
+# existing environment/.env value wins, then profile, then the script's generic
+# fallback. This preserves the script's historical .env override behavior.
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a; . "$REPO_DIR/.env"; set +a
+else
+  warn_env=1
+fi
+
+SETUP_FILE="$REPO_DIR/setups/$SETUP_NAME.env"
+[ -f "$SETUP_FILE" ] || { echo "[x] setup file missing: $SETUP_FILE" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$SETUP_FILE"
+FLOWMESH_SETUP="$SETUP_NAME"
 
 # =============================================================================
 #  MODEL — change these two lines to swap models. Nothing else needs touching.
@@ -42,13 +89,17 @@ set -euo pipefail
 #                                                                specialist
 #    meta-llama/Llama-3.1-8B-Instruct         llama
 #
-#  Avoid for this project: Devstral 24B (no KV headroom left) and Granite 4
-#  hybrids (Mamba layers have no KV cache to reuse, which removes the thing
-#  the prefix-cache experiments measure).
+#  Hybrid models require architecture-aware cache accounting. The Qwen3.5
+#  profile uses vLLM's hybrid cache manager and must be calibrated separately;
+#  never reuse the Qwen2.5 TTFT/KV geometry.
 # =============================================================================
 
 MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}"
 TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
+REASONING_PARSER="${REASONING_PARSER:-}"
+QUANTIZATION="${QUANTIZATION:-}"
+LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-0}"
+EXPERIMENT_NAMESPACE="${EXPERIMENT_NAMESPACE:-$SETUP_NAME}"
 
 # ---------------------------------------------------------------- config ----
 # Override any of these from the environment.
@@ -114,16 +165,32 @@ PROXY_PORT="${PROXY_PORT:-8000}"
 VLLM_VERSION="${VLLM_VERSION:-}"           # empty = latest
 TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+print_config() {
+  cat <<EOF
+setup=$SETUP_NAME
+workflow=${FLOWMESH_WORKFLOW:-}
+ssh_alias=${FLOWMESH_SSH_ALIAS:-}
+tunnel_name=${FLOWMESH_TUNNEL_NAME:-}
+experiment_namespace=$EXPERIMENT_NAMESPACE
+model=$MODEL
+tool_call_parser=$TOOL_CALL_PARSER
+reasoning_parser=${REASONING_PARSER:-none}
+quantization=${QUANTIZATION:-none}
+language_model_only=$LANGUAGE_MODEL_ONLY
+max_model_len=$MAX_MODEL_LEN
+native_max_model_len=$NATIVE_MAX_MODEL_LEN
+attention_backend=$ATTENTION_BACKEND
+kv_cache_dtype=$KV_CACHE_DTYPE
+gpu_mem_util=$GPU_MEM_UTIL
+vllm_extra_args=${VLLM_EXTRA_ARGS:-none}
+edgeproxy_max_local_tokens=${EDGEPROXY_MAX_LOCAL_TOKENS:-60000}
+edgeproxy_local_token_margin=${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}
+EOF
+}
 
-# .env holds ANTHROPIC_AUTH_TOKEN (the Lumid claude:proxy PAT) and any
-# EDGEPROXY_* overrides. It is gitignored — the repo is public — so it does not
-# arrive with `git clone` and has to be copied over separately each session.
-# Only `serve` needs it; `check` and `install` are fine without.
-if [ -f "$REPO_DIR/.env" ]; then
-  set -a; . "$REPO_DIR/.env"; set +a
-else
-  warn_env=1
+if [ "$PRINT_CONFIG" -eq 1 ]; then
+  print_config
+  exit 0
 fi
 
 # ------------------------------------------------------------- utilities ----
@@ -312,6 +379,10 @@ phase_serve() {
     || die "MAX_MODEL_LEN must be a positive integer (got '$MAX_MODEL_LEN')"
   [[ "$NATIVE_MAX_MODEL_LEN" =~ ^[1-9][0-9]*$ ]] \
     || die "NATIVE_MAX_MODEL_LEN must be a positive integer (got '$NATIVE_MAX_MODEL_LEN')"
+  case "$LANGUAGE_MODEL_ONLY" in
+    0|1) ;;
+    *) die "LANGUAGE_MODEL_ONLY must be 0 or 1 (got '$LANGUAGE_MODEL_ONLY')" ;;
+  esac
 
   local hf_override_args=()
   if [ "$MAX_MODEL_LEN" -gt "$NATIVE_MAX_MODEL_LEN" ]; then
@@ -341,6 +412,21 @@ phase_serve() {
     log "attention backend: auto (vLLM selects the best compatible optimized backend)"
   fi
 
+  local reasoning_args=()
+  if [ -n "$REASONING_PARSER" ]; then
+    reasoning_args=(--reasoning-parser "$REASONING_PARSER")
+  fi
+
+  local quantization_args=()
+  if [ -n "$QUANTIZATION" ]; then
+    quantization_args=(--quantization "$QUANTIZATION")
+  fi
+
+  local language_model_args=()
+  if [ "$LANGUAGE_MODEL_ONLY" -eq 1 ]; then
+    language_model_args=(--language-model-only)
+  fi
+
   case " $VLLM_EXTRA_ARGS " in
     *" --enforce-eager "*|*" -O0 "*)
       warn "VLLM_EXTRA_ARGS disables or reduces CUDA graphs/torch.compile optimizations"
@@ -360,6 +446,9 @@ phase_serve() {
     --enable-prompt-tokens-details \
     --enable-auto-tool-choice \
     --tool-call-parser "$TOOL_CALL_PARSER" \
+    "${reasoning_args[@]}" \
+    "${quantization_args[@]}" \
+    "${language_model_args[@]}" \
     --override-generation-config "{\"temperature\":$VLLM_TEMPERATURE}" \
     --structured-outputs-config.backend "$STRUCTURED_OUTPUT_BACKEND" \
     $VLLM_EXTRA_ARGS \
@@ -400,6 +489,15 @@ from transformers import AutoConfig
 
 model, cache_dtype = sys.argv[1:]
 config = AutoConfig.from_pretrained(model, local_files_only=True)
+config = getattr(config, "text_config", config)
+
+layer_types = getattr(config, "layer_types", None)
+if layer_types and any(kind not in ("full_attention", "attention") for kind in layer_types):
+    print(
+        "hybrid cache has no single KV-bytes/token value; leaving GiB estimate unavailable",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 layers = getattr(config, "num_hidden_layers")
 kv_heads = getattr(config, "num_key_value_heads", getattr(config, "num_attention_heads"))
@@ -429,31 +527,40 @@ PY
   # Provenance for the results directory — KV capacity in blocks is the number
   # every prefix-cache and cohort experiment gets normalised against.
   local stamp; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "$REPO_DIR/results"
+  local result_dir="$REPO_DIR/results/$EXPERIMENT_NAMESPACE"
+  mkdir -p "$result_dir"
   {
     echo "timestamp    $stamp"
+    echo "setup        $SETUP_NAME"
+    echo "namespace    $EXPERIMENT_NAMESPACE"
     echo "model        $MODEL"
+    echo "tool_parser  $TOOL_CALL_PARSER  reasoning_parser ${REASONING_PARSER:-none}"
+    echo "quantization ${QUANTIZATION:-none}  language_model_only $LANGUAGE_MODEL_ONLY"
     echo "max_model_len $MAX_MODEL_LEN  gpu_mem_util $GPU_MEM_UTIL  kv_dtype $KV_CACHE_DTYPE"
+    echo "vllm_extra_args ${VLLM_EXTRA_ARGS:-none}"
+    echo "router_cap ${EDGEPROXY_MAX_LOCAL_TOKENS:-60000}  router_margin ${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}"
     echo "native_model_len $NATIVE_MAX_MODEL_LEN  attention_backend $ATTENTION_BACKEND"
     if [ -n "$VLLM_HF_OVERRIDES" ]; then echo "hf_overrides $VLLM_HF_OVERRIDES"; fi
     nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader
     grep -iE 'gpu blocks|kv cache size|graph captur|attention backend' "$LOG_DIR/vllm.log" | head -30 || true
-  } > "$REPO_DIR/results/env-$stamp.txt"
-  log "wrote results/env-$stamp.txt"
+  } > "$result_dir/env-$stamp.txt"
+  log "wrote results/$EXPERIMENT_NAMESPACE/env-$stamp.txt"
 
   if [ -n "${warn_env:-}" ]; then
     warn "no .env found — edgeproxy has no upstream token to relay."
-    warn "copy it over:  scp .env fmbox:$REPO_DIR/.env"
+    warn "copy it over:  scp .env ${FLOWMESH_SSH_ALIAS:-fmbox}:$REPO_DIR/.env"
   fi
 
   if [ -f "$REPO_DIR/edgeproxy/server.py" ]; then
     log "starting edgeproxy on :$PROXY_PORT"
     nohup "$VENV/bin/python" -m edgeproxy.server \
       --port "$PROXY_PORT" \
-      --trace-dir "${EDGEPROXY_TRACE_DIR:-$REPO_DIR/traces}" \
+      --trace-dir "${EDGEPROXY_TRACE_DIR:-$REPO_DIR/traces/$EXPERIMENT_NAMESPACE}" \
       --vllm-url "http://localhost:$VLLM_PORT" \
       --local-cache-tracking "${EDGEPROXY_LOCAL_CACHE_TRACKING:-observe}" \
       --cloud-cache-tracking "${EDGEPROXY_CLOUD_CACHE_TRACKING:-observe}" \
+      --max-local-tokens "${EDGEPROXY_MAX_LOCAL_TOKENS:-60000}" \
+      --local-token-margin "${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}" \
       "${proxy_resource_args[@]}" \
       > "$LOG_DIR/proxy.log" 2>&1 &
     local proxy_pid=$!
@@ -478,14 +585,15 @@ PY
       curl -s localhost:$VLLM_PORT/v1/completions -H 'content-type: application/json' \\
         -d '{"model":"$SERVED_NAME","prompt":"hello","max_tokens":10}' | head -c 300
 
-    !! commit or rsync results/ before you disconnect — this box is disposable.
+    !! copy results/$EXPERIMENT_NAMESPACE and traces/$EXPERIMENT_NAMESPACE
+       before you disconnect — this box is disposable.
 
 EOF
 }
 
 # ------------------------------------------------------------------ main ----
 
-case "${1:-all}" in
+case "$PHASE" in
   check)   phase_check ;;
   install) phase_install; phase_check ;;
   model)   phase_model ;;
@@ -494,5 +602,5 @@ case "${1:-all}" in
   # check runs twice on purpose: once up front for GPU/scratch, and again after
   # install, which is the first point at which the sm_120 verdict is knowable.
   all)     phase_check; phase_install; phase_check; phase_harness; phase_model; phase_serve ;;
-  *)       die "unknown phase '$1' (check|install|harness|model|serve|all)" ;;
+  *)       die "unknown phase '$PHASE' (check|install|harness|model|serve|all)" ;;
 esac

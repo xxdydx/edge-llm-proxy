@@ -4,8 +4,9 @@ A local small/quantized model + KV/prefix cache that serves latency-sensitive
 calls itself and offloads heavy ones to the cloud, behind an
 Anthropic-API-compatible endpoint. Research plan: [PLAN.md](PLAN.md).
 
-Dev runs on a disposable FlowMesh GPU box (RTX 5080, 16 GB). Sessions are wiped
-on TTL expiry, so everything is rebuilt from git each time.
+Dev runs on disposable FlowMesh GPU boxes. The Qwen2.5-7B baseline uses an RTX
+5080; the Qwen3.8-27B NVFP4 comparison uses an RTX 5090. Sessions are wiped on TTL
+expiry, so each box is bootstrapped from the selected setup profile.
 
 ---
 
@@ -32,20 +33,33 @@ docker run --privileged --rm tonistiigi/binfmt --install amd64
 ## Daily use
 
 ```bash
-./flowmesh-up.sh
+./flowmesh-up.sh --setup qwen25-7b   # RTX 5080 baseline
+./flowmesh-up.sh --setup qwen38-27b  # RTX 5090 comparison
 ```
 
-Submits the task, waits for SSH, writes an `fmbox` alias to `~/.ssh/config`,
-copies `.env`, fetches the repo on the box, and runs `bootstrap.sh`. Ends with a
-`ready.` banner and the task id.
+With no `--setup`, the command keeps the 7B default. Each invocation submits the
+profile's workflow, waits for SSH, writes a setup-specific alias to
+`~/.ssh/config`, copies `.env`, uploads the current sanitized local source, and
+runs `bootstrap.sh --setup <name>`. It ends with a `ready.` banner and task id.
+Run the two commands in separate terminals if both boxes are needed at once;
+their task IDs, SSH aliases, VS Code tunnel names, results, and traces do not
+collide.
 
 It also starts a VS Code tunnel and opens a window on the box's files, so on a
 normal day that one command is all of it.
 
 ```bash
-ssh fmbox                                          # plain shell
-scp fmbox:~/edge-llm-proxy-main/results/* results/ # pull results before the TTL
+ssh fmbox-qwen25-7b                                # 7B shell
+ssh fmbox-qwen38-27b                               # 27B shell
+scp -r fmbox-qwen38-27b:~/edge-llm-proxy-main/results/qwen38-27b-5090 results/
 flowmesh task stop <task-id>                       # release (TTL is 8h)
+```
+
+Inspect either resolved profile without provisioning a GPU:
+
+```bash
+./flowmesh-up.sh --setup qwen38-27b --print-config
+./bootstrap.sh --setup qwen38-27b --print-config
 ```
 
 ## Recording traces
@@ -133,14 +147,15 @@ contains. Remote-SSH needs a forwarded channel and fails with
 `channel N: open failed: administratively prohibited`.
 
 Tunnels dial **out** to Microsoft's relay instead, so the restriction doesn't
-apply. `flowmesh-up.sh` opens the window for you; to connect by hand:
+apply. `flowmesh-up.sh` opens the window for you. Each setup has a distinct
+tunnel; to connect by hand, use for example:
 
-- <https://vscode.dev/tunnel/fmbox>, or
+- <https://vscode.dev/tunnel/flowmesh-qwen25-7b>, or
 - desktop VS Code → **Remote Explorer** → switch the dropdown from *SSH* to
-  **Tunnels** → `fmbox`
+  **Tunnels** → `flowmesh-qwen25-7b`
 
-Note both the SSH alias and the tunnel are named `fmbox`, so Remote Explorer
-shows two similar entries — the SSH one is the one that doesn't work.
+The 27B tunnel is `flowmesh-qwen38-27b`. The similarly named SSH entries are
+for terminal/scp access; VS Code must use the **Tunnels** list.
 
 The tunnel login lives in `~/.vscode/cli/token.json` on the box and dies with
 the session, so `flowmesh-up.sh` stashes it to `~/.flowmesh/vscode-cli.tar.gz`
@@ -152,7 +167,8 @@ Run the tunnel under `tmux` if you start it manually, or it dies with your
 terminal:
 
 ```bash
-ssh -t fmbox 'tmux new -s tunnel "~/.vscode-server/code-* tunnel --name fmbox"'
+ssh -t fmbox-qwen25-7b \
+  'tmux new -s tunnel "~/.vscode-server/code-* tunnel --name flowmesh-qwen25-7b"'
 ```
 
 First connection downloads ~100 MB of VS Code Server onto the box, and does so
@@ -188,12 +204,12 @@ traceback without a compiler.
 `./flowmesh-up.sh` already does this. To do it by hand:
 
 ```bash
-ssh fmbox
+ssh fmbox-qwen25-7b
 cd ~ && rm -rf edge-llm-proxy-main
 curl -sL https://github.com/xxdydx/edge-llm-proxy/archive/refs/heads/main.tar.gz | tar xz
 cd edge-llm-proxy-main
 cp ~/.env .env          # if you copied one over
-./bootstrap.sh
+./bootstrap.sh --setup qwen25-7b
 ```
 
 The one-command path uploads a sanitized snapshot of the current local working
@@ -219,34 +235,48 @@ curl -s localhost:8001/v1/messages -H 'content-type: application/json' \
 
 ### `bootstrap.sh`
 
-Four phases, all four by default, or name one:
+Select a setup first, then optionally name a phase. All phases run by default:
 
 ```bash
-./bootstrap.sh check      # GPU, scratch, sm_120 kernel support   ~30s
-./bootstrap.sh install    # vLLM into /opt/venv                   ~5min
-./bootstrap.sh model      # pull weights                          ~3min
-./bootstrap.sh serve      # launch vLLM + edgeproxy               ~2min
+./bootstrap.sh --setup qwen25-7b check
+./bootstrap.sh --setup qwen38-27b install
+./bootstrap.sh --setup qwen38-27b model
+./bootstrap.sh --setup qwen38-27b serve
 ```
+
+The public files in `setups/` contain model-specific defaults. Explicit
+environment variables (and machine-local `.env` values) override a profile.
+The 7B setup selects Qwen2.5 AWQ, Hermes, static YaRN, and forced FlashAttention
+on the RTX 5080. The 27B setup selects the approved
+`Inferact/Qwen3.8-27B-NVFP4` checkpoint, Qwen3 parsers, a 100K context cap, FP8
+KV, eager execution, and at most eight sequences on the RTX 5090. The official
+full-precision checkpoint is 55.6 GB and does not fit one 5090. Do not reuse
+the 7B TTFT or cache calibration for the 27B hybrid architecture.
+The proxy receives the selected setup's context limit as well: with the common
+0.90 safety margin, the 27B router admits at most 90K input-plus-reserved-output
+tokens locally and sends larger calls to cloud.
 
 Overridable via environment:
 
-| Variable | Default |
+| Variable | 7B default | 27B setup |
 | --- | --- |
-| `MODEL` | `Qwen/Qwen2.5-7B-Instruct-AWQ` |
-| `SERVED_NAME` | `local` (space-separated list for aliases) |
-| `MAX_MODEL_LEN` | `60000` |
-| `NATIVE_MAX_MODEL_LEN` | `32768` |
-| `YARN_FACTOR` / `YARN_ROPE_THETA` | `4.0` / `1000000` |
-| `VLLM_HF_OVERRIDES` | auto-generated for Qwen2.5 when the requested cap exceeds 32K |
-| `GPU_MEM_UTIL` | `0.90` |
-| `KV_CACHE_DTYPE` | `auto`; do not enable FP8 without a separate sm_120 correctness test |
-| `ATTENTION_BACKEND` | `FLASH_ATTN`; startup fails rather than silently falling back |
-| `VLLM_SERVER_DEV_MODE` | direct `bootstrap.sh`: `0`; `flowmesh-up.sh`: `1` for controlled cache benchmarks |
-| `VLLM_FORK_BRANCH` | `vllm-cache-probe-cu130` |
-| `VLLM_PRECOMPILED_WHEEL_COMMIT` | `4ca856b0b59d87c7b167d1bd8c748421719c9a57` |
-| `TOOL_CALL_PARSER` | `hermes` (model-specific) |
-| `VLLM_EXTRA_ARGS` | empty (`--enforce-eager` skips CUDA graphs) |
-| `VLLM_PORT` / `PROXY_PORT` | `8001` / `8000` |
+| `MODEL` | `Qwen/Qwen2.5-7B-Instruct-AWQ` | `Inferact/Qwen3.8-27B-NVFP4` |
+| `SERVED_NAME` | `local` | `local` |
+| `MAX_MODEL_LEN` | `60000` | `100000` |
+| `NATIVE_MAX_MODEL_LEN` | `32768` | `262144` |
+| `YARN_FACTOR` / `YARN_ROPE_THETA` | `4.0` / `1000000` | unused at 100K |
+| `VLLM_HF_OVERRIDES` | generated for Qwen2.5 above 32K | empty |
+| `GPU_MEM_UTIL` | `0.90` | `0.90` |
+| `KV_CACHE_DTYPE` | `auto` | `fp8` |
+| `ATTENTION_BACKEND` | forced `FLASH_ATTN` | `auto`, record selected backend |
+| `VLLM_SERVER_DEV_MODE` | direct bootstrap `0`; FlowMesh `1` | same |
+| `VLLM_FORK_BRANCH` | `vllm-cache-probe-cu130` | same |
+| `VLLM_PRECOMPILED_WHEEL_COMMIT` | `4ca856b0b59d87c7b167d1bd8c748421719c9a57` | same |
+| `TOOL_CALL_PARSER` / `REASONING_PARSER` | `hermes` / none | `qwen3_coder` / `qwen3` |
+| `VLLM_EXTRA_ARGS` | empty | `--enforce-eager --max-num-seqs 8` |
+| `EDGEPROXY_MAX_LOCAL_TOKENS` | `60000` | `100000` |
+| `EDGEPROXY_LOCAL_TOKEN_MARGIN` | `0.90` | `0.90` |
+| `VLLM_PORT` / `PROXY_PORT` | `8001` / `8000` | same |
 
 ```bash
 MODEL=Qwen/Qwen3-8B-AWQ ./bootstrap.sh
@@ -262,11 +292,12 @@ explicit requirement: bootstrap passes `--attention-backend FLASH_ATTN` and
 fails if the startup log does not confirm it. Torch compilation and CUDA graph
 capture remain enabled. `VLLM_USE_FLASHINFER_SAMPLER=0` disables only
 FlashInfer's JIT-compiled sampler. The selected attention backend and
-graph-capture evidence are copied into each `results/env-*.txt` file.
+graph-capture evidence are copied into each
+`results/<experiment-namespace>/env-*.txt` file.
 
-`serve` writes `results/env-<timestamp>.txt` with the GPU details and KV cache
-size. That number is the denominator for every prefix-cache experiment — pull it
-off the box before the session dies.
+`serve` writes `results/<experiment-namespace>/env-<timestamp>.txt` with the GPU
+details and cache telemetry. Traces use the same namespace. Pull both directories
+off the disposable box before the session dies.
 
 ### vLLM speaks Anthropic natively
 

@@ -34,6 +34,8 @@ class Config:
     kv_bytes_per_token: int | None
     cloud_cache_tracking: str
     local_cache_tracking: str = "off"
+    max_local_tokens: int = 60_000
+    local_token_margin: float = 0.9
 
     @property
     def backends(self) -> dict[str, str]:
@@ -105,6 +107,18 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="probe live vLLM prefix residency before placement",
     )
     p.add_argument(
+        "--max-local-tokens",
+        type=int,
+        default=int(env("EDGEPROXY_MAX_LOCAL_TOKENS", "60000")),
+        help="local model input-plus-output context limit before safety margin",
+    )
+    p.add_argument(
+        "--local-token-margin",
+        type=float,
+        default=float(env("EDGEPROXY_LOCAL_TOKEN_MARGIN", "0.9")),
+        help="fraction of max-local-tokens available to the static router",
+    )
+    p.add_argument(
         "--shaping",
         default=env("EDGEPROXY_SHAPING", "proxy"),
         choices=["proxy", "netem", "none"],
@@ -120,6 +134,10 @@ def parse_args(argv: list[str] | None = None) -> Config:
     p.add_argument("--cloud-jitter-ms", type=float, default=None, help="overrides preset")
     p.add_argument("--cloud-bandwidth-mbps", type=float, default=None, help="overrides preset")
     a = p.parse_args(argv)
+    if a.max_local_tokens <= 0:
+        p.error("--max-local-tokens must be positive")
+    if not 0 < a.local_token_margin <= 1:
+        p.error("--local-token-margin must be greater than 0 and at most 1")
 
     # Preset supplies the defaults; the explicit flags win where given.
     base = LinkShaper.from_preset(a.link_preset)
@@ -145,4 +163,6 @@ def parse_args(argv: list[str] | None = None) -> Config:
         kv_bytes_per_token=a.kv_bytes_per_token,
         cloud_cache_tracking=a.cloud_cache_tracking,
         local_cache_tracking=a.local_cache_tracking,
+        max_local_tokens=a.max_local_tokens,
+        local_token_margin=a.local_token_margin,
     )
