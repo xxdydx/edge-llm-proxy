@@ -260,7 +260,23 @@ print(f"    torch     {torch.__version__}  (cuda {torch.version.cuda})")
 print(f"    device    {torch.cuda.get_device_name(0)}  {sm}")
 print(f"    archs     {' '.join(arch)}")
 
-if sm not in arch and not any(a.startswith("sm_90") and cap[0] >= 9 for a in arch):
+def parse_sm(a):
+    if not a.startswith("sm_"):
+        return None
+    digits = a[3:]
+    return int(digits[:-1]), int(digits[-1])
+
+# CUDA guarantees a cubin built for compute capability X.y runs unmodified on
+# any device X.z with z >= y (same major, lower-or-equal minor) — e.g. sm_86
+# kernels are binary-compatible with an sm_89 (Ada) device. Check that before
+# giving up, instead of requiring an exact arch-string match.
+same_family = any(
+    p is not None and p[0] == cap[0] and p[1] <= cap[1]
+    for p in (parse_sm(a) for a in arch)
+)
+cross_gen = any(a.startswith("sm_90") and cap[0] >= 9 for a in arch)
+
+if sm not in arch and not same_family and not cross_gen:
     print(f"    !! torch has no kernels for {sm}", file=sys.stderr)
     sys.exit(1)
 
