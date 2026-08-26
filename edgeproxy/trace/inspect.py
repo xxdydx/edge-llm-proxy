@@ -106,6 +106,43 @@ def cache_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return by_placement
 
 
+def cache_prediction_stats(
+    records: list[dict[str, Any]], backend: str
+) -> dict[str, int | float]:
+    """Summarise pre-decision estimates against selected-backend usage."""
+    key = f"{backend}_cache"
+    entries = [r.get(key) for r in records if isinstance(r.get(key), dict)]
+    predictions = [
+        item
+        for item in entries
+        if (item.get("prediction") or {}).get("estimated_read_tokens") is not None
+    ]
+    scored = [item for item in entries if (item.get("actual") or {}).get("available")]
+    comparable = [
+        item
+        for item in scored
+        if (item.get("agreement") or {}).get("within_5_percent_of_input") is not None
+    ]
+    within = sum(
+        bool((item.get("agreement") or {}).get("within_5_percent_of_input"))
+        for item in comparable
+    )
+    errors = [
+        float((item.get("agreement") or {})["cached_token_error_fraction_of_input"])
+        for item in comparable
+        if (item.get("agreement") or {}).get("cached_token_error_fraction_of_input")
+        is not None
+    ]
+    return {
+        "tracked": len(entries),
+        "predicted": len(predictions),
+        "actual": len(scored),
+        "comparable": len(comparable),
+        "within_5pct": within,
+        "median_error_fraction": statistics.median(errors) if errors else 0.0,
+    }
+
+
 def summarise(records: list[dict[str, Any]]) -> None:
     print(f"records            {len(records)}")
     if not records:
@@ -206,6 +243,39 @@ def summarise(records: list[dict[str, Any]]) -> None:
             "output_tok_s      "
             f"p50 {_pct(output_rates, .5):>8.1f}  p90 {_pct(output_rates, .9):>8.1f}"
         )
+
+    priced = [
+        r["cost_savings"]
+        for r in messages
+        if isinstance(r.get("cost_savings"), dict)
+        and r["cost_savings"].get("available")
+    ]
+    if priced:
+        cloud_list_cost = sum(float(row["cloud_cost_usd"]) for row in priced)
+        saved = sum(float(row["request_saved_usd"]) for row in priced)
+        local_priced = sum(float(row["request_saved_usd"]) > 0 for row in priced)
+        print("\nAnthropic list-price accounting")
+        print(
+            f"  priced requests  {len(priced):>8,}  local savings on {local_priced:,}"
+        )
+        print(f"  represented cost ${cloud_list_cost:>11.6f}")
+        print(f"  routing saved    ${saved:>11.6f}")
+
+    prediction_rows = {
+        backend: cache_prediction_stats(messages, backend)
+        for backend in ("local", "cloud")
+    }
+    if any(row["tracked"] for row in prediction_rows.values()):
+        print("\ncache prediction versus selected-backend actual")
+        for backend, row in prediction_rows.items():
+            if not row["tracked"]:
+                continue
+            print(
+                f"  {backend:<8} predicted {row['predicted']:>5,}/{row['tracked']:<5,}"
+                f"  actual {row['actual']:>5,}"
+                f"  within-5% {row['within_5pct']:>5,}/{row['comparable']:<5,}"
+                f"  median error/input {row['median_error_fraction']:>6.2%}"
+            )
 
     cache_predictions = [
         r["cloud_cache"]

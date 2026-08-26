@@ -58,7 +58,16 @@ def features_for(
     """Recompute by default: older records predate the `features` field, and
     recomputing keeps every policy on identical footing."""
     if use_recorded and isinstance(record.get("features"), dict):
-        return router.CallFeatures(**record["features"])
+        # Trace schemas are append-only, while CallFeatures deliberately drops
+        # unsafe routing inputs. Ignore historical fields such as the removed
+        # character-based est_prompt_tokens rather than resurrecting them.
+        allowed = set(router.CallFeatures.__dataclass_fields__)
+        payload = {
+            key: value
+            for key, value in record["features"].items()
+            if key in allowed
+        }
+        return router.CallFeatures(**payload)
     return router.extract_features(record["request"], gap)
 
 

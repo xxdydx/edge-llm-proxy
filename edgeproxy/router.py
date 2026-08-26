@@ -27,12 +27,19 @@ class CallFeatures:
     n_tools: int
     has_server_tools: bool
     n_messages: int
-    est_prompt_tokens: int
     est_system_tokens: int
     max_tokens: int
     stream: bool
     is_tool_continuation: bool
     seconds_since_last_call: float | None = None
+    # Exact local rendering and live prefix residency from the patched vLLM
+    # probe. The static policy uses exact input length when it is available;
+    # cache-aware preference remains a later policy decision.
+    local_prompt_tokens: int | None = None
+    local_cache_state: str | None = None
+    estimated_local_cached_tokens: int | None = None
+    estimated_local_cached_fraction: float | None = None
+    local_cache_prediction_confidence: str | None = None
     # TTL this request asked for, and how many breakpoints it set. Both are
     # properties of the request body, so they are recoverable from any trace.
     cloud_cache_ttl_s: float | None = None
@@ -129,7 +136,6 @@ def extract_features(
     ttls = _breakpoint_ttls(request)
 
     system_chars = _text_len(request.get("system"))
-    body_chars = sum(_text_len(m.get("content")) for m in messages if isinstance(m, dict))
     tool_chars = len(str(tools)) if tools else 0
 
     is_continuation = False
@@ -152,7 +158,6 @@ def extract_features(
         n_tools=len(tools),
         has_server_tools=server_tools,
         n_messages=len(messages),
-        est_prompt_tokens=(system_chars + body_chars + tool_chars) // CHARS_PER_TOKEN,
         est_system_tokens=(system_chars + tool_chars) // CHARS_PER_TOKEN,
         max_tokens=int(request.get("max_tokens") or 0),
         stream=bool(request.get("stream")),
@@ -219,14 +224,27 @@ class StaticPolicy:
         """
         if self.clamp_max_tokens is None:
             return f.max_tokens
-        headroom = max(0, self.budget() - f.est_prompt_tokens)
+        if f.local_prompt_tokens is None:
+            return max(1, min(f.max_tokens, self.clamp_max_tokens))
+        prompt_tokens = f.local_prompt_tokens
+        headroom = max(0, self.budget() - prompt_tokens)
         return max(1, min(f.max_tokens, self.clamp_max_tokens, headroom))
 
     def decide(self, f: CallFeatures) -> Decision:
         if f.has_server_tools:
             return Decision("cloud", "server-side-tool")
 
-        need = f.est_prompt_tokens + self.effective_max_tokens(f)
+        # When live probing was requested, failure leaves both hard capacity
+        # and cache state unknown. Do not repeat the old unsafe behaviour by
+        # silently substituting the character estimate.
+        if f.local_cache_prediction_confidence == "unavailable":
+            return Decision("cloud", "local-probe-unavailable")
+
+        if f.local_prompt_tokens is None:
+            return Decision("cloud", "local-token-count-unavailable")
+
+        prompt_tokens = f.local_prompt_tokens
+        need = prompt_tokens + self.effective_max_tokens(f)
         if need > self.budget():
             return Decision("cloud", "too-large", f"{need} > {self.budget()} tokens")
 

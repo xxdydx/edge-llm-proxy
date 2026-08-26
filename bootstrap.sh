@@ -452,6 +452,8 @@ PY
       --port "$PROXY_PORT" \
       --trace-dir "${EDGEPROXY_TRACE_DIR:-$REPO_DIR/traces}" \
       --vllm-url "http://localhost:$VLLM_PORT" \
+      --local-cache-tracking "${EDGEPROXY_LOCAL_CACHE_TRACKING:-observe}" \
+      --cloud-cache-tracking "${EDGEPROXY_CLOUD_CACHE_TRACKING:-observe}" \
       "${proxy_resource_args[@]}" \
       > "$LOG_DIR/proxy.log" 2>&1 &
     local proxy_pid=$!

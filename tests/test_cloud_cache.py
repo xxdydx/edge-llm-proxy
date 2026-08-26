@@ -255,6 +255,7 @@ class TrackerLifecycleTests(unittest.TestCase):
         )
         self.assertTrue(trace["agreement"]["warm_prediction_correct"])
         self.assertEqual(trace["agreement"]["cached_token_error"], 0)
+        self.assertTrue(trace["agreement"]["within_5_percent_of_input"])
 
     def test_trace_does_not_call_plain_input_uncached_without_cache_detail(self):
         prediction = self.tracker.probe(self.chain, 1)

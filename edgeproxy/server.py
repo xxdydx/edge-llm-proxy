@@ -8,6 +8,7 @@ knowing which is in play.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -30,7 +31,9 @@ from .cloud_cache import (
     cloud_cache_trace,
     prefix_chain,
 )
+from .cost import build_cost_savings
 from .config import Config, parse_args
+from .local_cache import LocalCachePrediction, local_cache_trace, probe_local_cache
 from .shaping import LinkMonitor, LinkShaper
 from .telemetry import LocalResourceSampler
 from .timing import make_trace_extension
@@ -160,6 +163,7 @@ def make_app(cfg: Config) -> FastAPI:
             "upstream": cfg.upstream,
             "trace_dir": str(cfg.trace_dir),
             "cloud_cache_tracking": cfg.cloud_cache_tracking,
+            "local_cache_tracking": cfg.local_cache_tracking,
         }
 
     @app.api_route(
@@ -187,11 +191,17 @@ def make_app(cfg: Config) -> FastAPI:
         detail: str | None = None
         clamped_to: int | None = None
         original_model: str | None = None
+        requested_model = (
+            str(request_json.get("model") or "")
+            if isinstance(request_json, dict)
+            else ""
+        )
         original_temperature: Any = None
         strict_tools_added = 0
         feature_dict: dict[str, Any] | None = None
         cloud_chain: PrefixChain | None = None
         cloud_prediction: CloudCachePrediction | None = None
+        local_prediction: LocalCachePrediction | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
                 session = request.headers.get("x-claude-code-session-id")
@@ -202,6 +212,32 @@ def make_app(cfg: Config) -> FastAPI:
                     gap = round(now - prev, 1) if prev is not None else None
                     last_seen[session] = now
                 features = router.extract_features(request_json, gap)
+                if cfg.local_cache_tracking == "observe":
+                    # Probe the exact prompt that vLLM would receive. Generation
+                    # controls are local-only and the original cloud request
+                    # must remain untouched until placement is known.
+                    local_probe_request = copy.deepcopy(request_json)
+                    _apply_local_generation_controls(local_probe_request)
+                    local_probe_request["model"] = cfg.local_model_name
+                    local_prediction = await probe_local_cache(
+                        request.app.state.clients["local"], local_probe_request
+                    )
+                    features = replace(
+                        features,
+                        local_prompt_tokens=local_prediction.input_tokens,
+                        local_cache_state=local_prediction.state,
+                        estimated_local_cached_tokens=(
+                            local_prediction.estimated_read_tokens
+                        ),
+                        estimated_local_cached_fraction=(
+                            local_prediction.estimated_read_fraction
+                        ),
+                        local_cache_prediction_confidence=(
+                            "live-ground-truth"
+                            if local_prediction.available
+                            else "unavailable"
+                        ),
+                    )
                 if cfg.cloud_cache_tracking == "observe":
                     try:
                         scope = cache_scope(cfg.upstream, headers)
@@ -280,8 +316,25 @@ def make_app(cfg: Config) -> FastAPI:
         }
         if placement == "local":
             record["local_resources"] = request.app.state.resource_sampler.snapshot()
+        if local_prediction is not None:
+            record["local_cache"] = local_cache_trace(
+                local_prediction, selected=placement == "local"
+            )
         if cloud_prediction is not None:
-            record["cloud_cache"] = cloud_cache_trace(cloud_prediction)
+            record["cloud_cache"] = cloud_cache_trace(
+                cloud_prediction, selected=placement == "cloud"
+            )
+        if path.rstrip("/") == "v1/messages":
+            # Ensure transport errors and malformed upstream responses still
+            # carry an explicit unavailable cost record rather than omitting
+            # the field. Successful responses replace this after usage arrives.
+            record["cost_savings"] = build_cost_savings(
+                placement=placement,
+                requested_model=requested_model,
+                usage={},
+                chain=cloud_chain,
+                prediction=cloud_prediction,
+            )
 
         client: httpx.AsyncClient = request.app.state.clients[placement]
         trace_ext, read_timing = make_trace_extension()
@@ -362,7 +415,10 @@ def make_app(cfg: Config) -> FastAPI:
                 )
                 cloud_observed = cloud_observation.applied
                 record["cloud_cache"] = cloud_cache_trace(
-                    cloud_prediction, usage, cloud_observation
+                    cloud_prediction,
+                    usage,
+                    cloud_observation,
+                    selected=True,
                 )
             except Exception:
                 log.exception("cloud cache observation failed (ignored)")
@@ -376,6 +432,17 @@ def make_app(cfg: Config) -> FastAPI:
                 parsed = None
             usage = _usage_of(parsed)
             observe_cloud_cache(usage)
+            if local_prediction is not None:
+                record["local_cache"] = local_cache_trace(
+                    local_prediction, usage, selected=placement == "local"
+                )
+            if cloud_prediction is not None:
+                record["cloud_cache"] = cloud_cache_trace(
+                    cloud_prediction,
+                    usage,
+                    cloud_observation,
+                    selected=placement == "cloud",
+                )
             record |= {
                 "response": parsed,
                 "usage": usage,
@@ -386,6 +453,14 @@ def make_app(cfg: Config) -> FastAPI:
                     **conn.as_dict(),
                 },
             }
+            if path.rstrip("/") == "v1/messages":
+                record["cost_savings"] = build_cost_savings(
+                    placement=placement,
+                    requested_model=requested_model,
+                    usage=usage,
+                    chain=cloud_chain,
+                    prediction=cloud_prediction,
+                )
             writer.write(record)
             return Response(
                 content=payload,
@@ -430,6 +505,10 @@ def make_app(cfg: Config) -> FastAPI:
                     decoded_events.extend(decoder.finish())
                     message, usage = reassemble(decoded_events)
                     observe_cloud_cache(usage)
+                    if local_prediction is not None:
+                        record["local_cache"] = local_cache_trace(
+                            local_prediction, usage, selected=placement == "local"
+                        )
                     output_tokens = usage.get("output_tokens")
                     try:
                         output_tokens = int(output_tokens)
@@ -457,7 +536,10 @@ def make_app(cfg: Config) -> FastAPI:
                     )
                     if cloud_prediction is not None:
                         record["cloud_cache"] = cloud_cache_trace(
-                            cloud_prediction, usage, cloud_observation
+                            cloud_prediction,
+                            usage,
+                            cloud_observation,
+                            selected=placement == "cloud",
                         )
                     record.update({
                         "response": message,
@@ -480,6 +562,14 @@ def make_app(cfg: Config) -> FastAPI:
                             **conn.as_dict(),
                         },
                     })
+                    if path.rstrip("/") == "v1/messages":
+                        record["cost_savings"] = build_cost_savings(
+                            placement=placement,
+                            requested_model=requested_model,
+                            usage=usage,
+                            chain=cloud_chain,
+                            prediction=cloud_prediction,
+                        )
                 except Exception:
                     log.exception("SSE reassembly failed (recording raw length only)")
                     record["response_bytes"] = len(accumulated)

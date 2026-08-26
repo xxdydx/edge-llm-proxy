@@ -241,7 +241,7 @@ Overridable via environment:
 | `GPU_MEM_UTIL` | `0.90` |
 | `KV_CACHE_DTYPE` | `auto`; do not enable FP8 without a separate sm_120 correctness test |
 | `ATTENTION_BACKEND` | `FLASH_ATTN`; startup fails rather than silently falling back |
-| `VLLM_SERVER_DEV_MODE` | `0`; set `1` only for cache-reset benchmarks |
+| `VLLM_SERVER_DEV_MODE` | direct `bootstrap.sh`: `0`; `flowmesh-up.sh`: `1` for controlled cache benchmarks |
 | `VLLM_FORK_BRANCH` | `vllm-cache-probe-cu130` |
 | `VLLM_PRECOMPILED_WHEEL_COMMIT` | `4ca856b0b59d87c7b167d1bd8c748421719c9a57` |
 | `TOOL_CALL_PARSER` | `hermes` (model-specific) |
@@ -324,6 +324,34 @@ a backend reports input/output usage but omits cache details, the totals remain
 populated while the three cache-breakdown fields are `null`. Failed calls with
 no provider usage also use `null`, keeping “unknown” distinct from measured
 zero.
+
+Successful `/v1/messages` records also include cache-aware Anthropic list-price
+accounting under `cost_savings`. Cloud calls use the provider's actual uncached,
+cache-read, 5-minute-write, 1-hour-write, and output counts. Local calls use
+the observed local input/output volume plus the pre-dispatch cloud-cache
+prediction to estimate the Anthropic bill avoided by routing locally:
+
+```json
+"cost_savings": {
+  "available": true,
+  "requested_model": "claude-sonnet-5",
+  "source": "local-usage-plus-cloud-cache-prediction",
+  "confidence": "estimated-from-cloud-cache-tracker",
+  "cloud_cost_usd": 0.004321,
+  "request_saved_usd": 0.004321,
+  "running_saved_usd": 0.127654
+}
+```
+
+`request_saved_usd` is zero for cloud placements. `running_saved_usd` is
+updated atomically in JSONL write order, covers the current UTC-daily trace
+file, and is recovered if the proxy restarts. Unknown model prices, missing
+usage, or unavailable cloud-cache predictions produce explicit `null` costs.
+The bundled table is standard global Anthropic list pricing dated 2026-08-26;
+it excludes batch/priority/data-residency modifiers, taxes, tool fees, local
+electricity, and gateway-specific pricing. A local saving is necessarily an
+estimate because local and Anthropic tokenizers and generated output can
+differ.
 
 The background `local_resources.vllm` snapshot also includes vLLM's cumulative
 prefix-query/hit counters when the installed version exports them. Those
@@ -413,7 +441,8 @@ A requested warm condition may be invalid under eviction pressure; the runner
 records the actual vLLM counter delta instead of assuming a hit.
 
 The benchmark requires vLLM's cache-reset route. In vLLM 0.27 it is a
-development-only endpoint, so vLLM must have been started with:
+development-only endpoint. `flowmesh-up.sh` enables it by default on the
+isolated experiment box. When starting the serving phase directly, use:
 
 ```bash
 VLLM_SERVER_DEV_MODE=1 ./bootstrap.sh serve
@@ -422,6 +451,8 @@ VLLM_SERVER_DEV_MODE=1 ./bootstrap.sh serve
 Setting the variable after vLLM starts does nothing. Development mode exposes
 cache-management routes that can disrupt in-flight service, so use it only on
 the isolated experiment box, not an externally accessible production server.
+For a deliberately production-like FlowMesh run, disable it with
+`VLLM_SERVER_DEV_MODE=0 ./flowmesh-up.sh`.
 
 ---
 

@@ -15,6 +15,10 @@ WORKFLOW="${WORKFLOW:-ssh-workflow.yaml}"
 REPO_URL="${REPO_URL:-https://github.com/xxdydx/edge-llm-proxy}"
 REPO_DIR_NAME="edge-llm-proxy-main"
 SOURCE_MODE="${SOURCE_MODE:-local}"  # local (default) or github
+# FlowMesh boxes are isolated experiment environments, and the controlled
+# cold/warm benchmarks require vLLM's cache-reset route. Keep this overridable
+# so a deliberately production-like run can disable development endpoints.
+VLLM_SERVER_DEV_MODE="${VLLM_SERVER_DEV_MODE:-1}"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -341,7 +345,7 @@ tar -xzf "$REMOTE_SOURCE_ARCHIVE" -C "$REPO_DIR_NAME"
 rm -f "$REMOTE_SOURCE_ARCHIVE"
 if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
 cd "$REPO_DIR_NAME"
-./bootstrap.sh
+VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh
 REMOTE
 else
   ssh_run bash -s <<REMOTE
@@ -351,7 +355,7 @@ rm -rf "$REPO_DIR_NAME"
 curl -sL "$REPO_URL/archive/refs/heads/main.tar.gz" | tar xz
 if [ -f ~/.env ]; then cp ~/.env "$REPO_DIR_NAME/.env"; fi
 cd "$REPO_DIR_NAME"
-./bootstrap.sh
+VLLM_SERVER_DEV_MODE="$VLLM_SERVER_DEV_MODE" ./bootstrap.sh
 REMOTE
 fi
 

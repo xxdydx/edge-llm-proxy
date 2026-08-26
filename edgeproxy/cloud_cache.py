@@ -578,6 +578,8 @@ def cloud_cache_trace(
     prediction: CloudCachePrediction,
     usage: Mapping[str, Any] | None = None,
     observation: CloudCacheObservation | None = None,
+    *,
+    selected: bool = True,
 ) -> dict[str, Any]:
     usage = usage or {}
     read = _usage_count(usage, "cache_read_input_tokens")
@@ -587,8 +589,21 @@ def cloud_cache_trace(
     breakdown = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
     actual_warm = read is not None and read > 0
     predicted_warm = prediction.state == "warm"
+    total_input = (
+        (read or 0) + (creation or 0) + (uncached or 0)
+        if details_available
+        else None
+    )
     token_error = (
-        abs((prediction.estimated_read_tokens or 0) - read) if read is not None else None
+        abs((prediction.estimated_read_tokens or 0) - read)
+        if selected and read is not None
+        else None
+    )
+    error_fraction = token_error / total_input if token_error is not None and total_input else None
+    relative_error = (
+        token_error / read
+        if token_error is not None and read
+        else (0.0 if token_error == 0 else None)
     )
     return {
         "schema_version": KEY_SCHEMA_VERSION,
@@ -597,15 +612,33 @@ def cloud_cache_trace(
         "static_lineage_key": prediction.lineage_key,
         "prediction": prediction.as_trace(),
         "actual": {
-            "cache_read_input_tokens": read,
-            "cache_creation_input_tokens": creation,
-            "uncached_input_tokens": uncached,
-            "creation_5m_input_tokens": _usage_count(breakdown, "ephemeral_5m_input_tokens"),
-            "creation_1h_input_tokens": _usage_count(breakdown, "ephemeral_1h_input_tokens"),
+            "selected_backend": selected,
+            "available": selected and details_available,
+            "total_input_tokens": total_input if selected else None,
+            "cache_read_input_tokens": read if selected else None,
+            "cache_creation_input_tokens": creation if selected else None,
+            "uncached_input_tokens": uncached if selected else None,
+            "creation_5m_input_tokens": (
+                _usage_count(breakdown, "ephemeral_5m_input_tokens") if selected else None
+            ),
+            "creation_1h_input_tokens": (
+                _usage_count(breakdown, "ephemeral_1h_input_tokens") if selected else None
+            ),
         },
         "agreement": {
-            "warm_prediction_correct": predicted_warm == actual_warm if read is not None else None,
+            "warm_prediction_correct": (
+                predicted_warm == actual_warm if selected and read is not None else None
+            ),
             "cached_token_error": token_error,
+            "cached_token_relative_error": (
+                round(relative_error, 6) if relative_error is not None else None
+            ),
+            "cached_token_error_fraction_of_input": (
+                round(error_fraction, 6) if error_fraction is not None else None
+            ),
+            "within_5_percent_of_input": (
+                error_fraction <= 0.05 if error_fraction is not None else None
+            ),
         },
         "observation": observation.as_trace() if observation else None,
     }

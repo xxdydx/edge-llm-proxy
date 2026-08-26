@@ -204,6 +204,8 @@ class TraceWriter:
     def __init__(self, trace_dir: Path) -> None:
         self.dir = trace_dir
         self._lock = threading.Lock()
+        self._running_path: Path | None = None
+        self._running_saved_usd = 0.0
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -212,10 +214,45 @@ class TraceWriter:
     def _path(self) -> Path:
         return self.dir / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl"
 
+    def _load_running_total(self, path: Path) -> float:
+        """Recover today's cumulative saving after a proxy restart."""
+        if not path.exists():
+            return 0.0
+        last_total: float | None = None
+        try:
+            with path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        record = json.loads(line)
+                        value = (record.get("cost_savings") or {}).get(
+                            "running_saved_usd"
+                        )
+                        if value is not None:
+                            last_total = float(value)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        continue
+        except OSError:
+            log.exception("could not recover running cost saving from %s", path)
+        return last_total or 0.0
+
     def write(self, record: dict[str, Any]) -> None:
         try:
-            line = json.dumps(record, ensure_ascii=False, default=str)
-            with self._lock, self._path().open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            with self._lock:
+                path = self._path()
+                if path != self._running_path:
+                    self._running_saved_usd = self._load_running_total(path)
+                    self._running_path = path
+                cost = record.get("cost_savings")
+                if isinstance(cost, dict):
+                    saved = cost.get("request_saved_usd")
+                    if saved is not None:
+                        self._running_saved_usd += float(saved)
+                    cost["running_saved_usd"] = round(self._running_saved_usd, 12)
+                line = json.dumps(record, ensure_ascii=False, default=str)
+                fh = path.open("a", encoding="utf-8")
+                try:
+                    fh.write(line + "\n")
+                finally:
+                    fh.close()
         except Exception:
             log.exception("trace write failed (ignored)")
