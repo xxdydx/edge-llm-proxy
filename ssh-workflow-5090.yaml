@@ -15,7 +15,7 @@ spec:
   resources:
     hardware:
       gpu:
-        type: RTX 5090
+        type: RTX 6000 Ada
         count: 1
       cpu: 12
       memory: 64Gi
