@@ -5,7 +5,8 @@ calls itself and offloads heavy ones to the cloud, behind an
 Anthropic-API-compatible endpoint. Research plan: [PLAN.md](PLAN.md).
 
 Dev runs on disposable FlowMesh GPU boxes. The Qwen2.5-7B baseline uses an RTX
-5080; the Qwen3.8-27B NVFP4 comparison uses an RTX 5090. Sessions are wiped on TTL
+5080; the Qwen3.8-27B NVFP4 comparison runs on a selected compatible GPU
+(currently RTX 5090 or RTX 6000 Ada). Sessions are wiped on TTL
 expiry, so each box is bootstrapped from the selected setup profile.
 
 ---
@@ -34,7 +35,7 @@ docker run --privileged --rm tonistiigi/binfmt --install amd64
 
 ```bash
 ./flowmesh-up.sh --setup qwen25-7b   # RTX 5080 baseline
-./flowmesh-up.sh --setup qwen38-27b  # RTX 5090 comparison
+./flowmesh-up.sh --setup qwen38-27b  # Qwen3.8 comparison; select GPU in workflow
 ```
 
 With no `--setup`, the command keeps the 7B default. Each invocation submits the
@@ -51,7 +52,7 @@ normal day that one command is all of it.
 ```bash
 ssh fmbox-qwen25-7b                                # 7B shell
 ssh fmbox-qwen38-27b                               # 27B shell
-scp -r fmbox-qwen38-27b:~/edge-llm-proxy-main/results/qwen38-27b-5090 results/
+scp -r fmbox-qwen38-27b:~/edge-llm-proxy-main/results/qwen38-27b results/
 flowmesh task stop <task-id>                       # release (TTL is 8h)
 ```
 
@@ -249,8 +250,8 @@ environment variables (and machine-local `.env` values) override a profile.
 The 7B setup selects Qwen2.5 AWQ, Hermes, static YaRN, and forced FlashAttention
 on the RTX 5080. The 27B setup selects the approved
 `Inferact/Qwen3.8-27B-NVFP4` checkpoint, Qwen3 parsers, a 100K context cap, FP8
-KV, eager execution, and at most eight sequences on the RTX 5090. The official
-full-precision checkpoint is 55.6 GB and does not fit one 5090. Do not reuse
+KV, eager execution, and at most eight sequences on one selected compatible GPU.
+The official full-precision checkpoint is 55.6 GB and does not fit one device. Do not reuse
 the 7B TTFT or cache calibration for the 27B hybrid architecture.
 The proxy receives the selected setup's context limit as well: with the common
 0.90 safety margin, the 27B router admits at most 90K input-plus-reserved-output
@@ -533,9 +534,10 @@ container start.
 
 ## Known environment quirks
 
-- No `nvcc` or CUDA toolkit in the image, so anything that JIT-compiles CUDA
-  kernels fails. `bootstrap.sh` sets `VLLM_USE_FLASHINFER_SAMPLER=0` for this
-  reason.
+- The rebuilt image includes CUDA 13.2 `nvcc` and cuRAND development headers
+  for request-shape-specific FlashInfer attention JIT. Both workflows pin the
+  rebuilt image's immutable digest. The separate FlashInfer sampling JIT remains disabled through
+  `VLLM_USE_FLASHINFER_SAMPLER=0`.
 - The session user has no root and no `apt`. Anything missing must go in the
   image.
 - No `node`/`npm`, so Claude Code isn't present. It doesn't need to be — traces

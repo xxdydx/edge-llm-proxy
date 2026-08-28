@@ -3,19 +3,19 @@ kind: SSHTask
 metadata:
   name: arul-edge-client-qwen38-27b
   annotations:
-    description: Qwen3.8-27B NVFP4 edge LLM experiment on RTX 5090
+    description: Qwen3.8-27B NVFP4 edge LLM experiment; set gpu.type per run
 
 spec:
   taskType: ssh
   interactive: true
   user: flowmesh
-  image: ghcr.io/xxdydx/edge-llm-dev@sha256:9bb2be290e5ba0a983af845da39a2651f237901a874ad38eafa74fc2e080b04b
+  image: ghcr.io/xxdydx/edge-llm-dev@sha256:c73a1a4a77e73ee9882468865f3ca2cef34631bffd595fa41de9c56904b9ba5c
   authorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
   resources:
     hardware:
       gpu:
-        type: RTX 6000 Ada
+        type: RTX 5090
         count: 1
       cpu: 12
       memory: 64Gi

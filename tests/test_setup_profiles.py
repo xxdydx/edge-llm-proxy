@@ -115,14 +115,17 @@ class SetupProfileTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown setup", result.stderr)
 
-    def test_5090_workflow_reuses_image_and_selects_rtx_5090(self):
+    def test_qwen38_workflow_reuses_image_and_selects_a_gpu(self):
         baseline = (ROOT / "ssh-workflow.yaml").read_text()
         comparison = (ROOT / "ssh-workflow-5090.yaml").read_text()
         image_line = next(
             line.strip() for line in baseline.splitlines() if line.strip().startswith("image:")
         )
         self.assertIn(image_line, comparison)
-        self.assertIn("type: RTX 5090", comparison)
+        gpu_line = next(
+            line.strip() for line in comparison.splitlines() if line.strip().startswith("type:")
+        )
+        self.assertNotEqual(gpu_line, "type:")
 
 
 if __name__ == "__main__":

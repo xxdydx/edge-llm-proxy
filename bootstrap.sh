@@ -151,10 +151,10 @@ export VLLM_ENFORCE_STRICT_TOOL_CALLING="${VLLM_ENFORCE_STRICT_TOOL_CALLING:-tru
 #   VLLM_EXTRA_ARGS="-O0"              lowest compilation level
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
-# FlashInfer JIT-compiles its *sampling* kernels on first use, which needs ninja
-# and nvcc. The session image has neither, so disable that sampler. This does
-# not disable FlashInfer attention: attention is selected independently by
-# vLLM and is reported from the startup log below.
+# FlashInfer JIT-compiles its sampling kernels on first use. Keep that sampler
+# disabled so sampling does not add a separate compile path; the rebuilt image
+# includes matching CUDA 13.2 nvcc for FlashInfer *attention*, which is selected
+# independently by vLLM and reported from the startup log below.
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 VLLM_PORT="${VLLM_PORT:-8001}"

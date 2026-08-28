@@ -32,6 +32,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# vLLM's cu132 stack can select FlashInfer attention for hybrid models.
+# FlashInfer compiles request-shape-specific kernels on first use, so the
+# runtime image needs an nvcc/toolkit version matching PyTorch's CUDA build.
+# The FlowMesh base contains only CUDA 12.9 runtime libraries; installing the
+# generic Ubuntu nvidia-cuda-toolkit (or a 12.9 compiler) would mismatch the
+# torch 2.13 + cu132 environment installed by bootstrap. Use NVIDIA's official
+# Ubuntu 24.04 repository and pin the CUDA 13.2 compiler-only metapackage.
+# FlashInfer's Blackwell FP4 kernels also include <curand_kernel.h>, which is
+# supplied by the matching cuRAND development package rather than nvcc itself.
+# This adds no driver and does not force either model profile to use FlashInfer.
+RUN curl -fsSLo /tmp/cuda-keyring.deb \
+        https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i /tmp/cuda-keyring.deb \
+    && rm -f /tmp/cuda-keyring.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        cuda-compiler-13-2=13.2.2-1 \
+        libcurand-dev-13-2=10.4.2.66-1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -x /usr/local/cuda-13.2/bin/nvcc \
+    && test -f /usr/local/cuda-13.2/targets/x86_64-linux/include/curand_kernel.h \
+    && /usr/local/cuda-13.2/bin/nvcc --version
+
 # uv ships as a static binary — copying it from the official image avoids
 # needing curl or a package manager. Pin a tag once a version is known good.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -39,7 +62,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Scratch is wiped between sessions; these live in the image instead.
 ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:/usr/local/bin:$PATH
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:/opt/venv/bin:/usr/local/bin:$PATH
 
 # Python plus the proxy's own dependencies. These are small, stable, and needed
 # every session — unlike vLLM, they are worth baking in.
