@@ -221,12 +221,12 @@ class StaticPolicy:
         max_local_tokens: int = 60_000,
         margin: float = 0.9,
         local_can_tool_call: bool = True,
-        clamp_max_tokens: int | None = 4096,
+        output_reserve_tokens: int = 0,
     ) -> None:
         self.max_local_tokens = max_local_tokens
         self.margin = margin
         self.local_can_tool_call = local_can_tool_call
-        self.clamp_max_tokens = clamp_max_tokens
+        self.output_reserve_tokens = output_reserve_tokens
 
     def budget(self) -> int:
         return int(self.max_local_tokens * self.margin)
@@ -234,20 +234,18 @@ class StaticPolicy:
     def effective_max_tokens(self, f: CallFeatures) -> int:
         """What max_tokens should become if this call is served locally.
 
-        The harness asks for 64000 on nearly every call — a reservation, not a
-        prediction; observed local outputs median 125 tokens. vLLM checks
-        prompt + max_tokens against max_model_len up front, so that reservation
-        alone excludes calls whose prompts fit comfortably (47 of 159 in the
-        recorded corpus). Clamping is what an edge proxy is for: fitting a
-        cloud-shaped request to local capacity.
+        Use the exact vLLM-rendered prompt length and consume all available
+        headroom after the configured safety-margin budget and explicit output
+        reserve. This removes the fixed 4,096-token truncation class while
+        retaining a hard input-plus-output capacity bound.
         """
-        if self.clamp_max_tokens is None:
-            return f.max_tokens
         if f.local_prompt_tokens is None:
-            return max(1, min(f.max_tokens, self.clamp_max_tokens))
-        prompt_tokens = f.local_prompt_tokens
-        headroom = max(0, self.budget() - prompt_tokens)
-        return max(1, min(f.max_tokens, self.clamp_max_tokens, headroom))
+            return 0
+        headroom = max(
+            0,
+            self.budget() - f.local_prompt_tokens - self.output_reserve_tokens,
+        )
+        return min(f.max_tokens, headroom)
 
     def decide(self, f: CallFeatures) -> Decision:
         # This is a Claude Code control-plane sidecall, not an ordinary agent
@@ -270,7 +268,15 @@ class StaticPolicy:
             return Decision("cloud", "local-token-count-unavailable")
 
         prompt_tokens = f.local_prompt_tokens
-        need = prompt_tokens + self.effective_max_tokens(f)
+        effective_max_tokens = self.effective_max_tokens(f)
+        if effective_max_tokens < 1:
+            return Decision(
+                "cloud",
+                "too-large",
+                f"budget={self.budget()} prompt={prompt_tokens} "
+                f"reserve={self.output_reserve_tokens}",
+            )
+        need = prompt_tokens + effective_max_tokens + self.output_reserve_tokens
         if need > self.budget():
             return Decision("cloud", "too-large", f"{need} > {self.budget()} tokens")
 
@@ -292,11 +298,16 @@ def build(
     *,
     max_local_tokens: int = 60_000,
     margin: float = 0.9,
+    output_reserve_tokens: int = 0,
 ) -> Policy:
     try:
         policy_type = POLICIES[name]
     except KeyError:
         raise SystemExit(f"unknown policy {name!r} — one of: {', '.join(POLICIES)}")
     if policy_type is StaticPolicy:
-        return StaticPolicy(max_local_tokens=max_local_tokens, margin=margin)
+        return StaticPolicy(
+            max_local_tokens=max_local_tokens,
+            margin=margin,
+            output_reserve_tokens=output_reserve_tokens,
+        )
     return policy_type()

@@ -27,20 +27,67 @@ class RouterConfigurationTests(unittest.TestCase):
         self.assertEqual(policy.max_local_tokens, 100_000)
         self.assertEqual(policy.budget(), 90_000)
 
+    def test_dynamic_output_cap_uses_exact_prompt_and_full_headroom(self):
+        policy = router.StaticPolicy(
+            max_local_tokens=100_000,
+            margin=0.9,
+            output_reserve_tokens=0,
+        )
+        features = self._features(local_prompt_tokens=70_000, max_tokens=64_000)
+
+        self.assertEqual(policy.effective_max_tokens(features), 20_000)
+        self.assertEqual(policy.decide(features).placement, "local")
+
+    def test_dynamic_output_cap_subtracts_explicit_reserve(self):
+        policy = router.StaticPolicy(
+            max_local_tokens=100_000,
+            margin=0.9,
+            output_reserve_tokens=512,
+        )
+
+        self.assertEqual(
+            policy.effective_max_tokens(
+                self._features(local_prompt_tokens=70_000, max_tokens=64_000)
+            ),
+            19_488,
+        )
+
+    def test_no_output_headroom_routes_cloud(self):
+        policy = router.StaticPolicy(max_local_tokens=100_000, margin=0.9)
+
+        decision = policy.decide(
+            self._features(local_prompt_tokens=90_000, max_tokens=64_000)
+        )
+
+        self.assertEqual(decision.placement, "cloud")
+        self.assertEqual(decision.reason, "too-large")
+
     def test_non_static_policy_does_not_require_capacity_configuration(self):
         policy = router.build("cloud-only", max_local_tokens=100_000, margin=0.9)
         self.assertIsInstance(policy, router.CloudOnly)
 
     def test_proxy_cli_accepts_setup_specific_capacity(self):
         config = parse_args(
-            ["--max-local-tokens", "100000", "--local-token-margin", "0.9"]
+            [
+                "--max-local-tokens",
+                "100000",
+                "--local-token-margin",
+                "0.9",
+                "--local-output-reserve-tokens",
+                "0",
+            ]
         )
         self.assertEqual(config.max_local_tokens, 100_000)
         self.assertEqual(config.local_token_margin, 0.9)
+        self.assertEqual(config.local_output_reserve_tokens, 0)
 
     def test_proxy_cli_rejects_invalid_margin(self):
         with self.assertRaises(SystemExit):
             parse_args(["--local-token-margin", "1.1"])
+
+    def test_proxy_cli_rejects_negative_output_reserve(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--local-output-reserve-tokens", "-1"])
 
     def test_security_monitor_feature_is_detected_from_system_blocks(self):
         features = router.extract_features(

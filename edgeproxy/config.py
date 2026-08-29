@@ -36,6 +36,7 @@ class Config:
     local_cache_tracking: str = "off"
     max_local_tokens: int = 60_000
     local_token_margin: float = 0.9
+    local_output_reserve_tokens: int = 0
 
     @property
     def backends(self) -> dict[str, str]:
@@ -119,6 +120,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="fraction of max-local-tokens available to the static router",
     )
     p.add_argument(
+        "--local-output-reserve-tokens",
+        type=int,
+        default=int(env("EDGEPROXY_LOCAL_OUTPUT_RESERVE_TOKENS", "0")),
+        help="extra tokens left unused after the local safety-margin budget",
+    )
+    p.add_argument(
         "--shaping",
         default=env("EDGEPROXY_SHAPING", "proxy"),
         choices=["proxy", "netem", "none"],
@@ -138,6 +145,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         p.error("--max-local-tokens must be positive")
     if not 0 < a.local_token_margin <= 1:
         p.error("--local-token-margin must be greater than 0 and at most 1")
+    if a.local_output_reserve_tokens < 0:
+        p.error("--local-output-reserve-tokens must be non-negative")
 
     # Preset supplies the defaults; the explicit flags win where given.
     base = LinkShaper.from_preset(a.link_preset)
@@ -165,4 +174,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         local_cache_tracking=a.local_cache_tracking,
         max_local_tokens=a.max_local_tokens,
         local_token_margin=a.local_token_margin,
+        local_output_reserve_tokens=a.local_output_reserve_tokens,
     )

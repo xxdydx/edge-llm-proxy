@@ -150,18 +150,20 @@ def reconstruct_cloud_cache(
     return out, metrics
 
 
-def build_policy(name: str, cap: int, clamp: int | None, tools: bool) -> router.Policy:
+def build_policy(name: str, cap: int, reserve: int, tools: bool) -> router.Policy:
     if name == "static":
         return router.StaticPolicy(
-            max_local_tokens=cap, clamp_max_tokens=clamp, local_can_tool_call=tools
+            max_local_tokens=cap,
+            output_reserve_tokens=reserve,
+            local_can_tool_call=tools,
         )
     return router.build(name)
 
 
-def label(name: str, cap: int, clamp: int | None, tools: bool) -> str:
+def label(name: str, cap: int, reserve: int, tools: bool) -> str:
     if name != "static":
         return name
-    return f"static cap={cap // 1000}K clamp={clamp or 'off'} tools={'on' if tools else 'off'}"
+    return f"static cap={cap // 1000}K reserve={reserve} tools={'on' if tools else 'off'}"
 
 
 # ------------------------------------------------------------------ report ---
@@ -211,15 +213,15 @@ def sweep(records: list[dict[str, Any]], feats: list[router.CallFeatures]) -> No
         print(f"{name:34s} {loc:5d} ({100 * loc / n:5.1f}%)")
 
     print()
-    print(f"{'cap':>6} {'clamp':>7}   {'tools=off':>14} {'tools=on':>14}")
+    print(f"{'cap':>6} {'reserve':>7}   {'tools=off':>14} {'tools=on':>14}")
     for cap in (32_000, 65_536, 131_072):
-        for clamp in (None, 4096):
+        for reserve in (0, 512):
             row = []
             for tools in (False, True):
-                pol = build_policy("static", cap, clamp, tools)
+                pol = build_policy("static", cap, reserve, tools)
                 loc = sum(pol.decide(f).placement == "local" for f in feats)
                 row.append(f"{loc:4d} ({100 * loc / n:5.1f}%)")
-            print(f"{cap // 1000:>5}K {str(clamp or 'off'):>7}   {row[0]:>14} {row[1]:>14}")
+            print(f"{cap // 1000:>5}K {reserve:>7}   {row[0]:>14} {row[1]:>14}")
 
 
 # --------------------------------------------------------------------- cli ---
@@ -230,9 +232,9 @@ def main() -> None:
     ap.add_argument("paths", nargs="+", type=Path)
     ap.add_argument("--policy", action="append", help="repeatable; default: static")
     ap.add_argument("--cap", type=int, default=65_536, help="max_local_tokens for static")
-    ap.add_argument("--clamp", default="4096", help="max_tokens clamp, or 'off'")
+    ap.add_argument("--reserve", type=int, default=0, help="dynamic output reserve")
     ap.add_argument("--tools", default="on", choices=["on", "off"])
-    ap.add_argument("--sweep", action="store_true", help="grid over cap x clamp x tools")
+    ap.add_argument("--sweep", action="store_true", help="grid over cap x reserve x tools")
     ap.add_argument("--check", action="store_true", help="confusion matrix only")
     ap.add_argument("--out", type=Path, help="write per-call decisions as JSONL")
     ap.add_argument("--use-recorded-features", action="store_true")
@@ -242,6 +244,8 @@ def main() -> None:
         help="reconstruct provider-confirmed cloud cache state in timestamp order",
     )
     args = ap.parse_args()
+    if args.reserve < 0:
+        ap.error("--reserve must be non-negative")
 
     existing = [p for p in args.paths if p.exists()]
     if not existing:
@@ -302,7 +306,6 @@ def main() -> None:
         spread = ", ".join(f"{int(t)}s x{c}" for t, c in sorted(ttls.items()))
         print(f"    TTLs requested: {spread}")
 
-    clamp = None if args.clamp == "off" else int(args.clamp)
     tools = args.tools == "on"
 
     if args.sweep:
@@ -312,10 +315,10 @@ def main() -> None:
     names = args.policy or ["static"]
     last: list[router.Decision] = []
     for name in names:
-        pol = build_policy(name, args.cap, clamp, tools)
+        pol = build_policy(name, args.cap, args.reserve, tools)
         last = [pol.decide(f) for f in feats]
         if not args.check:
-            report(label(name, args.cap, clamp, tools), last, len(feats))
+            report(label(name, args.cap, args.reserve, tools), last, len(feats))
 
     if args.check or len(names) == 1:
         confusion(records, last)

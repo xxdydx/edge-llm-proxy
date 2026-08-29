@@ -153,6 +153,10 @@ class ServerCloudCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(records[1]["timing"]["ttft_ms"])
             self.assertIsNotNone(records[1]["timing"]["tpot_ms"])
+            self.assertEqual(records[1]["call"]["backend"], "cloud")
+            self.assertEqual(records[1]["call"]["tokens"]["prompt_tokens_exact"], 1810)
+            self.assertEqual(records[1]["call"]["tokens"]["cache_read_tokens"], 1800)
+            self.assertEqual(records[1]["call"]["tokens"]["usage_integrity"], "complete")
 
 
 if __name__ == "__main__":

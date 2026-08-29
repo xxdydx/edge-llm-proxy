@@ -35,9 +35,10 @@ result_root="${RESULT_ROOT:-$repo_dir/results/fanout-policy-pair}"
 cloud_port="${CLOUD_PROXY_PORT:-}"
 static_port="${STATIC_PROXY_PORT:-}"
 run_mode="${RUN_MODE:-concurrent}"
+run_condition_selection="${RUN_CONDITION:-pair}"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
-prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch five read-only subagents concurrently, covering: (1) routing, (2) request handling, (3) cache and trace logic, (4) telemetry/config/timing/shaping/cost, and (5) tests and testability. Use foreground Agent tool calls: emit the independent Agent calls together so they run in parallel, do not set run_in_background, and do not return while any agent is pending. Do not write files, install packages, run network commands, or commit anything. After every agent result has arrived, return one detailed consolidated Markdown report with sections for executive summary, findings from each agent, architecture and request data flow, risks, testing gaps, disagreements or overlaps between agents, and open questions. Do not return a launch/progress/waiting message. End the completed report with this exact line: <!-- FANOUT_REPORT_COMPLETE -->'
+prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch five read-only subagents concurrently, covering: (1) routing, (2) request handling, (3) cache and trace logic, (4) telemetry/config/timing/shaping/cost, and (5) tests and testability. Use foreground Agent tool calls: emit the independent Agent calls together so they run in parallel, do not set run_in_background, and do not return while any agent is pending. Do not write files, install packages, run network commands, or commit anything. After every agent result has arrived, return one detailed consolidated Markdown report. Start the report with this exact line: <!-- FANOUT_REPORT_START -->. Then use these exact level-two headings in this order: Executive Summary; Findings from Each Agent; Architecture and Request Data Flow; Risks; Testing Gaps; Disagreements or Overlaps Between Agents; Open Questions. Do not return a launch/progress/waiting message. End the completed report with this exact line: <!-- FANOUT_REPORT_COMPLETE -->'
 
 cloud_run_pid=""
 static_run_pid=""
@@ -108,6 +109,7 @@ start_proxy() {
     --cloud-cache-tracking observe \
     --max-local-tokens "${EDGEPROXY_MAX_LOCAL_TOKENS:-100000}" \
     --local-token-margin "${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}" \
+    --local-output-reserve-tokens "${EDGEPROXY_LOCAL_OUTPUT_RESERVE_TOKENS:-0}" \
     --shaping none \
     >"$log_path" 2>&1 &
   started_proxy_pid=$!
@@ -144,6 +146,25 @@ validate_report() {
     echo "error: report has no completion marker" >&2
     return 1
   fi
+  if [ "$(sed -n '1p' "$report_path")" != '<!-- FANOUT_REPORT_START -->' ]; then
+    echo "error: report does not start at the beginning marker" >&2
+    return 1
+  fi
+  local heading
+  for heading in \
+    '## Executive Summary' \
+    '## Findings from Each Agent' \
+    '## Architecture and Request Data Flow' \
+    '## Risks' \
+    '## Testing Gaps' \
+    '## Disagreements or Overlaps Between Agents' \
+    '## Open Questions'
+  do
+    if ! grep -Fxq "$heading" "$report_path"; then
+      echo "error: report is missing required heading: $heading" >&2
+      return 1
+    fi
+  done
 }
 
 run_condition() (
@@ -154,8 +175,11 @@ run_condition() (
   local proxy_log="$result_root/${label}_proxy_${run_stamp}.log"
   local claude_log="$result_root/${label}_claude_${run_stamp}.md"
   local claude_partial="$result_root/${label}_claude_${run_stamp}.partial.md"
+  local claude_stream="$result_root/${label}_claude_${run_stamp}.stream.jsonl"
   local trace_source
   local trace_dest="$trace_root/${label}_${run_stamp}.jsonl"
+  local trace_graph="$trace_root/${label}_${run_stamp}.graph.json"
+  local trace_tree="$trace_root/${label}_${run_stamp}.tree.txt"
   local pid=""
 
   cleanup_condition() {
@@ -176,8 +200,10 @@ run_condition() (
   if ! (
     cd "$repo_dir/edgeproxy"
     ANTHROPIC_BASE_URL="http://127.0.0.1:$port" \
-      "$claude_bin" -p "$prompt" --model "$claude_model" --dangerously-skip-permissions
-  ) | tee "$claude_partial"; then
+      "$claude_bin" -p "$prompt" --model "$claude_model" \
+        --dangerously-skip-permissions --output-format stream-json --verbose
+  ) | tee "$claude_stream" | "$python_bin" -m edgeproxy.report_capture \
+    | tee "$claude_partial"; then
     die "$label Claude Code run failed"
   fi
 
@@ -195,6 +221,15 @@ run_condition() (
   cp "$trace_source" "$trace_dest"
   echo "==> saved $label trace: $trace_dest"
 
+  "$python_bin" -m edgeproxy.trace.graph "$trace_dest" \
+    --claude-stream "$claude_stream" \
+    --json-output "$trace_graph" \
+    --tree-output "$trace_tree"
+  [ -s "$trace_graph" ] || die "$label trace graph was not created"
+  [ -s "$trace_tree" ] || die "$label trace tree was not created"
+  echo "==> saved $label trace graph: $trace_graph"
+  echo "==> saved $label trace tree:  $trace_tree"
+
   stop_pid "$pid"
   pid=""
 )
@@ -202,10 +237,12 @@ run_condition() (
 usage() {
   cat <<'EOF'
 Usage: run_fanout_policy_pair.sh [--mode concurrent|sequential]
+                                  [--condition pair|cloud|routing]
 
 Runs the cloud-only and static-policy conditions with the same read-only
 Claude Code fan-out prompt. Default mode is concurrent. Set RUN_MODE or pass
 --mode sequential to avoid overlap between the two Claude Code processes.
+Use --condition routing for a single static-policy validation run.
 EOF
 }
 
@@ -214,6 +251,11 @@ while [ "$#" -gt 0 ]; do
     --mode)
       [ "$#" -ge 2 ] || die "--mode requires concurrent or sequential"
       run_mode="$2"
+      shift 2
+      ;;
+    --condition)
+      [ "$#" -ge 2 ] || die "--condition requires pair, cloud, or routing"
+      run_condition_selection="$2"
       shift 2
       ;;
     --help|-h)
@@ -229,6 +271,10 @@ done
 case "$run_mode" in
   concurrent|sequential) ;;
   *) die "--mode must be concurrent or sequential, got: $run_mode" ;;
+esac
+case "$run_condition_selection" in
+  pair|cloud|routing) ;;
+  *) die "--condition must be pair, cloud, or routing, got: $run_condition_selection" ;;
 esac
 
 [ -d "$repo_dir/edgeproxy" ] || die "expected edgeproxy/ under $repo_dir"
@@ -252,9 +298,14 @@ echo "==> model:   $claude_model"
 echo "==> results: $result_root"
 echo "==> run:     $run_stamp"
 echo "==> mode:    $run_mode"
+echo "==> condition: $run_condition_selection"
 echo "==> ports:   cloud=$cloud_port routing=$static_port"
 
-if [ "$run_mode" = "concurrent" ]; then
+if [ "$run_condition_selection" = "cloud" ]; then
+  run_condition cloud cloud-only "$cloud_port"
+elif [ "$run_condition_selection" = "routing" ]; then
+  run_condition routing static "$static_port"
+elif [ "$run_mode" = "concurrent" ]; then
   run_condition cloud cloud-only "$cloud_port" &
   cloud_run_pid=$!
   run_condition routing static "$static_port" &

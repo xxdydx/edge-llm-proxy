@@ -38,11 +38,12 @@ from .shaping import LinkMonitor, LinkShaper
 from .telemetry import LocalResourceSampler
 from .timing import make_trace_extension
 from .trace.record import (
-    TraceWriter,
     SSEDecoder,
+    TraceWriter,
+    build_structured_call,
     build_token_accounting,
-    reassemble,
     redact_headers,
+    reassemble,
 )
 
 log = logging.getLogger("edgeproxy")
@@ -122,6 +123,7 @@ def make_app(cfg: Config) -> FastAPI:
         cfg.policy,
         max_local_tokens=cfg.max_local_tokens,
         margin=cfg.local_token_margin,
+        output_reserve_tokens=cfg.local_output_reserve_tokens,
     )
 
     # `netem` means shaping happens outside this process; we record the claim
@@ -183,6 +185,7 @@ def make_app(cfg: Config) -> FastAPI:
             "local_cache_tracking": cfg.local_cache_tracking,
             "max_local_tokens": cfg.max_local_tokens,
             "local_token_margin": cfg.local_token_margin,
+            "local_output_reserve_tokens": cfg.local_output_reserve_tokens,
             "effective_local_token_budget": int(
                 cfg.max_local_tokens * cfg.local_token_margin
             ),
@@ -203,6 +206,7 @@ def make_app(cfg: Config) -> FastAPI:
                 request_json = json.loads(body)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
+        original_request_json = copy.deepcopy(request_json)
 
         streaming = isinstance(request_json, dict) and bool(request_json.get("stream"))
 
@@ -212,6 +216,11 @@ def make_app(cfg: Config) -> FastAPI:
         reason = "not-routable"
         detail: str | None = None
         clamped_to: int | None = None
+        requested_max_tokens = (
+            int(request_json.get("max_tokens") or 0)
+            if isinstance(request_json, dict)
+            else None
+        )
         original_model: str | None = None
         requested_model = (
             str(request_json.get("model") or "")
@@ -324,6 +333,13 @@ def make_app(cfg: Config) -> FastAPI:
             "reason_detail": detail,
             "policy": policy.name,
             "clamped_max_tokens": clamped_to,
+            "requested_max_tokens": requested_max_tokens,
+            "effective_max_tokens": (
+                request_json.get("max_tokens")
+                if isinstance(request_json, dict)
+                else None
+            ),
+            "output_reserve_tokens": cfg.local_output_reserve_tokens,
             "original_model": original_model,
             "original_temperature": original_temperature,
             "strict_tools_added": strict_tools_added,
@@ -336,6 +352,14 @@ def make_app(cfg: Config) -> FastAPI:
             "usage": {},
             "token_accounting": build_token_accounting({}),
         }
+
+        def finalize_structured_call() -> None:
+            try:
+                record["call"] = build_structured_call(record, original_request_json)
+            except Exception:
+                # Trace enrichment must never interrupt a proxied response.
+                log.exception("structured call trace failed (ignored)")
+
         if placement == "local":
             record["local_resources"] = request.app.state.resource_sampler.snapshot()
         if local_prediction is not None:
@@ -380,6 +404,7 @@ def make_app(cfg: Config) -> FastAPI:
                 "error": repr(exc),
                 "timing": {"total_ms": round((time.monotonic() - started) * 1000, 1)},
             }
+            finalize_structured_call()
             writer.write(record)
             log.warning("upstream error on %s: %s", path, exc)
             return JSONResponse(
@@ -483,6 +508,7 @@ def make_app(cfg: Config) -> FastAPI:
                     chain=cloud_chain,
                     prediction=cloud_prediction,
                 )
+            finalize_structured_call()
             writer.write(record)
             return Response(
                 content=payload,
@@ -595,6 +621,7 @@ def make_app(cfg: Config) -> FastAPI:
                 except Exception:
                     log.exception("SSE reassembly failed (recording raw length only)")
                     record["response_bytes"] = len(accumulated)
+                finalize_structured_call()
                 writer.write(record)
 
         return StreamingResponse(

@@ -112,13 +112,15 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_local_probe_and_actual_are_traced_with_agreement(self):
         with tempfile.TemporaryDirectory() as directory:
             trace_dir = Path(directory)
-            app = make_app(config(trace_dir, policy="local-only"))
+            app = make_app(config(trace_dir))
+            sent_max_tokens = []
 
             def local(request: httpx.Request) -> httpx.Response:
                 if request.url.path.endswith("/count_cached_tokens"):
                     return httpx.Response(
                         200, json={"input_tokens": 100, "cached_tokens": 96}
                     )
+                sent_max_tokens.append(json.loads(request.content)["max_tokens"])
                 return httpx.Response(
                     200,
                     json={
@@ -147,7 +149,7 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         "/v1/messages",
                         json={
                             "model": "claude-sonnet-5",
-                            "max_tokens": 8,
+                            "max_tokens": 64_000,
                             "messages": [{"role": "user", "content": "hello"}],
                         },
                     )
@@ -166,6 +168,14 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(
                 record["local_cache"]["agreement"]["within_5_percent_of_input"]
             )
+            self.assertEqual(record["call"]["schema_version"], "edgeproxy.call.v1")
+            self.assertEqual(record["call"]["backend"], "local")
+            self.assertEqual(record["call"]["tokens"]["prompt_tokens_exact"], 100)
+            self.assertEqual(record["call"]["tokens"]["cache_read_tokens"], 96)
+            self.assertEqual(sent_max_tokens, [53_900])
+            self.assertEqual(record["requested_max_tokens"], 64_000)
+            self.assertEqual(record["effective_max_tokens"], 53_900)
+            self.assertEqual(record["output_reserve_tokens"], 0)
 
     async def test_exact_probe_length_prevents_local_context_overflow(self):
         with tempfile.TemporaryDirectory() as directory:
