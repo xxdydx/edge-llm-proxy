@@ -18,7 +18,7 @@ spec:
         type: RTX 6000 Ada
         count: 1
       cpu: 12
-      memory: 64Gi
+      memory: 96Gi
   ttlSeconds: 28800
   accessMode: forward
   output:

@@ -16,6 +16,10 @@ class Decision:
     detail: str | None = None
 
 CHARS_PER_TOKEN = 4  # just a rough estimate
+# Claude Code's security monitor sends a long transcript but asks for only a
+# 64-token decision. Qwen3.8 repeatedly exhausts that output budget before
+# returning its decision, so this special control-plane call stays cloud-side.
+SECURITY_MONITOR_MARKER = "You are a security monitor for autonomous"
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,7 @@ class CallFeatures:
     max_tokens: int
     stream: bool
     is_tool_continuation: bool
+    is_security_monitor: bool = False
     seconds_since_last_call: float | None = None
     # Exact local rendering and live prefix residency from the patched vLLM
     # probe. The static policy uses exact input length when it is available;
@@ -71,6 +76,17 @@ def _text_len(content: Any) -> int:
                 total += len(str(block["input"]))
         return total
     return 0
+
+
+def _text_contains(content: Any, marker: str) -> bool:
+    """Whether an Anthropic text/block value contains ``marker``."""
+    if isinstance(content, str):
+        return marker in content
+    if isinstance(content, list):
+        return any(_text_contains(block, marker) for block in content)
+    if isinstance(content, dict):
+        return any(_text_contains(value, marker) for value in content.values())
+    return False
 
 
 # Anthropic prompt caching. A breakpoint is `cache_control: {"type":
@@ -162,6 +178,9 @@ def extract_features(
         max_tokens=int(request.get("max_tokens") or 0),
         stream=bool(request.get("stream")),
         is_tool_continuation=is_continuation,
+        is_security_monitor=_text_contains(
+            request.get("system"), SECURITY_MONITOR_MARKER
+        ),
         seconds_since_last_call=seconds_since_last_call,
         cloud_cache_ttl_s=max(ttls) if ttls else None,
         n_cache_breakpoints=len(ttls),
@@ -231,6 +250,13 @@ class StaticPolicy:
         return max(1, min(f.max_tokens, self.clamp_max_tokens, headroom))
 
     def decide(self, f: CallFeatures) -> Decision:
+        # This is a Claude Code control-plane sidecall, not an ordinary agent
+        # turn. The client grants it 64 output tokens; cloud completes this
+        # call class while local Qwen3.8 often emits reasoning until vLLM cuts
+        # it off at that limit. Keep all other feasible traffic local-first.
+        if f.is_security_monitor:
+            return Decision("cloud", "security-monitor-cloud")
+
         if f.has_server_tools:
             return Decision("cloud", "server-side-tool")
 
