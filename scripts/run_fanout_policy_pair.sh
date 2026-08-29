@@ -23,21 +23,25 @@ fi
 
 python_bin="${PYTHON_BIN:-${VENV:-/opt/venv}/bin/python}"
 claude_bin="${CLAUDE_BIN:-claude}"
+# The FlowMesh role rejects Claude Code's Opus default. Callers can override
+# this with CLAUDE_MODEL, but Sonnet is the portable default for this runner.
+claude_model="${CLAUDE_MODEL:-sonnet}"
 vllm_url="${EDGEPROXY_VLLM_URL:-http://127.0.0.1:8001}"
 upstream="${EDGEPROXY_UPSTREAM:-https://lum.id/claude}"
 trace_root="${TRACE_ROOT:-$repo_dir/traces/fanout-policy-pair}"
 result_root="${RESULT_ROOT:-$repo_dir/results/fanout-policy-pair}"
-cloud_port="${CLOUD_PROXY_PORT:-8010}"
-static_port="${STATIC_PROXY_PORT:-8011}"
+# Leave ports dynamic by default. Fixed ports may be supplied when required,
+# but a previous interrupted run must never be mistaken for this run.
+cloud_port="${CLOUD_PROXY_PORT:-}"
+static_port="${STATIC_PROXY_PORT:-}"
 run_mode="${RUN_MODE:-concurrent}"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
-prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch several parallel read-only subagents, each covering a distinct part of this directory (routing, request handling, cache and trace logic, telemetry/config, and tests). Do not write files, install packages, run network commands, or commit anything. Return one detailed consolidated report of what each agent found, including architecture, data flow, risks, and open questions.'
+prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch five read-only subagents concurrently, covering: (1) routing, (2) request handling, (3) cache and trace logic, (4) telemetry/config/timing/shaping/cost, and (5) tests and testability. Use foreground Agent tool calls: emit the independent Agent calls together so they run in parallel, do not set run_in_background, and do not return while any agent is pending. Do not write files, install packages, run network commands, or commit anything. After every agent result has arrived, return one detailed consolidated Markdown report with sections for executive summary, findings from each agent, architecture and request data flow, risks, testing gaps, disagreements or overlaps between agents, and open questions. Do not return a launch/progress/waiting message. End the completed report with this exact line: <!-- FANOUT_REPORT_COMPLETE -->'
 
-cloud_pid=""
-static_pid=""
 cloud_run_pid=""
 static_run_pid=""
+started_proxy_pid=""
 
 die() {
   echo "error: $*" >&2
@@ -55,10 +59,19 @@ stop_pid() {
 cleanup() {
   [ -n "$cloud_run_pid" ] && kill "$cloud_run_pid" 2>/dev/null || true
   [ -n "$static_run_pid" ] && kill "$static_run_pid" 2>/dev/null || true
-  stop_pid "$cloud_pid"
-  stop_pid "$static_pid"
+  [ -n "$cloud_run_pid" ] && wait "$cloud_run_pid" 2>/dev/null || true
+  [ -n "$static_run_pid" ] && wait "$static_run_pid" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+
+free_port() {
+  "$python_bin" -c '
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+'
+}
 
 wait_for_health() {
   local port="$1"
@@ -68,7 +81,7 @@ wait_for_health() {
     if ! kill -0 "$pid" 2>/dev/null; then
       return 1
     fi
-    if curl --fail --silent --show-error "http://127.0.0.1:${port}/health" >/dev/null; then
+    if curl --fail --silent "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.2
@@ -97,56 +110,94 @@ start_proxy() {
     --local-token-margin "${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}" \
     --shaping none \
     >"$log_path" 2>&1 &
-  local pid=$!
+  started_proxy_pid=$!
 
-  if ! wait_for_health "$port" "$pid"; then
+  if ! wait_for_health "$port" "$started_proxy_pid"; then
     tail -40 "$log_path" >&2 || true
-    die "$label edgeproxy did not become healthy"
+    stop_pid "$started_proxy_pid"
+    started_proxy_pid=""
+    return 1
   fi
-  printf '%s' "$pid"
 }
 
-run_condition() {
+wait_for_trace() {
+  local trace_source="$1"
+  local deadline=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ -s "$trace_source" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+validate_report() {
+  local report_path="$1"
+  local min_report_bytes="${MIN_REPORT_BYTES:-2000}"
+  local report_bytes
+
+  report_bytes="$(wc -c <"$report_path" | tr -d '[:space:]')"
+  if [ "$report_bytes" -lt "$min_report_bytes" ]; then
+    echo "error: report is only ${report_bytes} bytes; expected at least ${min_report_bytes}" >&2
+    return 1
+  fi
+  if ! grep -Fxq '<!-- FANOUT_REPORT_COMPLETE -->' "$report_path"; then
+    echo "error: report has no completion marker" >&2
+    return 1
+  fi
+}
+
+run_condition() (
   local label="$1"
   local policy="$2"
   local port="$3"
   local trace_dir="$trace_root/$label-$run_stamp"
   local proxy_log="$result_root/${label}_proxy_${run_stamp}.log"
   local claude_log="$result_root/${label}_claude_${run_stamp}.md"
+  local claude_partial="$result_root/${label}_claude_${run_stamp}.partial.md"
   local trace_source
   local trace_dest="$trace_root/${label}_${run_stamp}.jsonl"
-  local pid
+  local pid=""
+
+  cleanup_condition() {
+    stop_pid "$pid"
+  }
+  trap cleanup_condition EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   echo "==> starting $label proxy ($policy) on :$port"
-  pid="$(start_proxy "$label" "$policy" "$port" "$trace_dir" "$proxy_log")"
-  if [ "$label" = "cloud" ]; then
-    cloud_pid="$pid"
-  else
-    static_pid="$pid"
+  if ! start_proxy "$label" "$policy" "$port" "$trace_dir" "$proxy_log"; then
+    tail -40 "$proxy_log" >&2 || true
+    die "$label edgeproxy did not become healthy"
   fi
+  pid="$started_proxy_pid"
 
   echo "==> running Claude Code through $label proxy"
-  (
+  if ! (
     cd "$repo_dir/edgeproxy"
     ANTHROPIC_BASE_URL="http://127.0.0.1:$port" \
-      "$claude_bin" -p "$prompt" --dangerously-skip-permissions
-  ) | tee "$claude_log"
+      "$claude_bin" -p "$prompt" --model "$claude_model" --dangerously-skip-permissions
+  ) | tee "$claude_partial"; then
+    die "$label Claude Code run failed"
+  fi
 
-  # Claude Code returns only after its requests have completed, but wait a
-  # moment for the proxy's append-only recorder to flush the final record.
-  sleep 1
+  if ! validate_report "$claude_partial"; then
+    die "$label Claude Code returned an incomplete report; preserved at $claude_partial"
+  fi
+  mv "$claude_partial" "$claude_log"
+  echo "==> saved $label report: $claude_log"
+
   trace_source="$trace_dir/$(date -u +%F).jsonl"
-  [ -s "$trace_source" ] || die "no trace written for $label condition"
+  if ! wait_for_trace "$trace_source"; then
+    tail -40 "$proxy_log" >&2 || true
+    die "no trace written for $label condition"
+  fi
   cp "$trace_source" "$trace_dest"
   echo "==> saved $label trace: $trace_dest"
 
   stop_pid "$pid"
-  if [ "$label" = "cloud" ]; then
-    cloud_pid=""
-  else
-    static_pid=""
-  fi
-}
+  pid=""
+)
 
 usage() {
   cat <<'EOF'
@@ -189,13 +240,19 @@ command -v curl >/dev/null || die "curl is required"
 # of where the caller invoked this script from.
 cd "$repo_dir"
 
+[ -n "$cloud_port" ] || cloud_port="$(free_port)"
+[ -n "$static_port" ] || static_port="$(free_port)"
+[ "$cloud_port" != "$static_port" ] || die "cloud and static proxy ports must differ"
+
 mkdir -p "$trace_root" "$result_root"
 
 echo "==> repo:    $repo_dir"
 echo "==> vLLM:    $vllm_url"
+echo "==> model:   $claude_model"
 echo "==> results: $result_root"
 echo "==> run:     $run_stamp"
 echo "==> mode:    $run_mode"
+echo "==> ports:   cloud=$cloud_port routing=$static_port"
 
 if [ "$run_mode" = "concurrent" ]; then
   run_condition cloud cloud-only "$cloud_port" &

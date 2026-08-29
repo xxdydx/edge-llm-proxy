@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 
 from edgeproxy.config import Config
-from edgeproxy.server import make_app
+from edgeproxy.server import _apply_local_generation_controls, make_app
 
 
 def config(trace_dir: Path, *, policy: str = "static") -> Config:
@@ -39,6 +39,28 @@ def records(trace_dir: Path) -> list[dict]:
 
 
 class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_controls_translate_claude_high_effort_for_qwen(self):
+        request = {
+            "temperature": 0.4,
+            "output_config": {"effort": "high"},
+        }
+
+        original_temperature, strict_tools_added = _apply_local_generation_controls(
+            request
+        )
+
+        self.assertEqual(original_temperature, 0.4)
+        self.assertEqual(strict_tools_added, 0)
+        self.assertEqual(request["temperature"], 0)
+        self.assertEqual(request["output_config"]["effort"], "xhigh")
+
+    async def test_local_controls_leave_supported_effort_unchanged(self):
+        request = {"output_config": {"effort": "medium"}}
+
+        _apply_local_generation_controls(request)
+
+        self.assertEqual(request["output_config"]["effort"], "medium")
+
     async def test_probe_failure_falls_back_to_cloud(self):
         with tempfile.TemporaryDirectory() as directory:
             trace_dir = Path(directory)

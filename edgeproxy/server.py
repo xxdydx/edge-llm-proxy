@@ -66,6 +66,9 @@ HOP_BY_HOP = {
 RESPONSE_STRIP = {"content-length", "content-encoding", "transfer-encoding", "connection"}
 
 LOCAL_TEMPERATURE = 0
+# Claude Code uses Anthropic's "high" effort spelling. Qwen3.8's chat template
+# calls the equivalent highest setting "xhigh" and rejects "high" outright.
+LOCAL_REASONING_EFFORT_ALIASES = {"high": "xhigh"}
 
 
 def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any, int]:
@@ -81,6 +84,16 @@ def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any,
     """
     original_temperature = request_json.get("temperature")
     request_json["temperature"] = LOCAL_TEMPERATURE
+
+    # This function runs on both the copied pre-routing probe body and the
+    # selected local request. Keep the transformation here so both render the
+    # same prefix and therefore query the same vLLM cache blocks. Cloud bodies
+    # never reach this function and retain Anthropic's original spelling.
+    output_config = request_json.get("output_config")
+    if isinstance(output_config, dict):
+        effort = output_config.get("effort")
+        if effort in LOCAL_REASONING_EFFORT_ALIASES:
+            output_config["effort"] = LOCAL_REASONING_EFFORT_ALIASES[effort]
 
     strict_tools_added = 0
     for tool in request_json.get("tools") or []:
