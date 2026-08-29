@@ -37,6 +37,7 @@ static_port="${STATIC_PROXY_PORT:-}"
 run_mode="${RUN_MODE:-concurrent}"
 run_condition_selection="${RUN_CONDITION:-pair}"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+experiment_id="${EXPERIMENT_ID:-fanout-$run_stamp}"
 
 prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch five read-only subagents concurrently, covering: (1) routing, (2) request handling, (3) cache and trace logic, (4) telemetry/config/timing/shaping/cost, and (5) tests and testability. Use foreground Agent tool calls: emit the independent Agent calls together so they run in parallel, do not set run_in_background, and do not return while any agent is pending. Do not write files, install packages, run network commands, or commit anything. After every agent result has arrived, return one detailed consolidated Markdown report. Start the report with this exact line: <!-- FANOUT_REPORT_START -->. Then use these exact level-two headings in this order: Executive Summary; Findings from Each Agent; Architecture and Request Data Flow; Risks; Testing Gaps; Disagreements or Overlaps Between Agents; Open Questions. Do not return a launch/progress/waiting message. End the completed report with this exact line: <!-- FANOUT_REPORT_COMPLETE -->'
 
@@ -96,6 +97,7 @@ start_proxy() {
   local port="$3"
   local trace_dir="$4"
   local log_path="$5"
+  local episode_id="$6"
 
   mkdir -p "$trace_dir"
   "$python_bin" -m edgeproxy.server \
@@ -104,6 +106,8 @@ start_proxy() {
     --upstream "$upstream" \
     --vllm-url "$vllm_url" \
     --trace-dir "$trace_dir" \
+    --experiment-id "$experiment_id" \
+    --episode-id "$episode_id" \
     --policy "$policy" \
     --local-cache-tracking observe \
     --cloud-cache-tracking observe \
@@ -180,7 +184,12 @@ run_condition() (
   local trace_dest="$trace_root/${label}_${run_stamp}.jsonl"
   local trace_graph="$trace_root/${label}_${run_stamp}.graph.json"
   local trace_tree="$trace_root/${label}_${run_stamp}.tree.txt"
+  local episode_id="${experiment_id}-${label}"
+  local episode_metadata="$result_root/${label}_episode_${run_stamp}.json"
+  local claude_session_id
   local pid=""
+
+  claude_session_id="$("$python_bin" -c 'import uuid; print(uuid.uuid4())')"
 
   cleanup_condition() {
     stop_pid "$pid"
@@ -190,7 +199,8 @@ run_condition() (
   trap 'exit 143' TERM
 
   echo "==> starting $label proxy ($policy) on :$port"
-  if ! start_proxy "$label" "$policy" "$port" "$trace_dir" "$proxy_log"; then
+  if ! start_proxy \
+    "$label" "$policy" "$port" "$trace_dir" "$proxy_log" "$episode_id"; then
     tail -40 "$proxy_log" >&2 || true
     die "$label edgeproxy did not become healthy"
   fi
@@ -199,13 +209,29 @@ run_condition() (
   echo "==> running Claude Code through $label proxy"
   if ! (
     cd "$repo_dir/edgeproxy"
-    ANTHROPIC_BASE_URL="http://127.0.0.1:$port" \
-      "$claude_bin" -p "$prompt" --model "$claude_model" \
-        --dangerously-skip-permissions --output-format stream-json --verbose
+    "$python_bin" -m edgeproxy.episode input --prompt "$prompt" \
+      | ANTHROPIC_BASE_URL="http://127.0.0.1:$port" \
+        "$claude_bin" -p --model "$claude_model" \
+          --session-id "$claude_session_id" \
+          --dangerously-skip-permissions \
+          --input-format stream-json \
+          --output-format stream-json \
+          --replay-user-messages \
+          --verbose
   ) | tee "$claude_stream" | "$python_bin" -m edgeproxy.report_capture \
     | tee "$claude_partial"; then
     die "$label Claude Code run failed"
   fi
+
+  "$python_bin" -m edgeproxy.episode capture "$claude_stream" \
+    --output "$episode_metadata" \
+    --experiment-id "$experiment_id" \
+    --episode-id "$episode_id" \
+    --condition "$label" \
+    --session-id "$claude_session_id" \
+    --working-directory "$repo_dir/edgeproxy" \
+    --require-checkpoint
+  echo "==> saved $label episode/checkpoint metadata: $episode_metadata"
 
   if ! validate_report "$claude_partial"; then
     die "$label Claude Code returned an incomplete report; preserved at $claude_partial"
@@ -297,6 +323,7 @@ echo "==> vLLM:    $vllm_url"
 echo "==> model:   $claude_model"
 echo "==> results: $result_root"
 echo "==> run:     $run_stamp"
+echo "==> experiment: $experiment_id"
 echo "==> mode:    $run_mode"
 echo "==> condition: $run_condition_selection"
 echo "==> ports:   cloud=$cloud_port routing=$static_port"

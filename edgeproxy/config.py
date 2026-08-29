@@ -33,6 +33,8 @@ class Config:
     gpu_index: int
     kv_bytes_per_token: int | None
     cloud_cache_tracking: str
+    experiment_id: str | None = None
+    episode_id: str | None = None
     local_cache_tracking: str = "off"
     max_local_tokens: int = 60_000
     local_token_margin: float = 0.9
@@ -58,6 +60,16 @@ def parse_args(argv: list[str] | None = None) -> Config:
     p.add_argument("--port", type=int, default=int(env("EDGEPROXY_PORT", "8000")))
     p.add_argument("--upstream", default=env("EDGEPROXY_UPSTREAM", DEFAULT_UPSTREAM))
     p.add_argument("--trace-dir", default=env("EDGEPROXY_TRACE_DIR", "./traces"))
+    p.add_argument(
+        "--experiment-id",
+        default=env("EDGEPROXY_EXPERIMENT_ID"),
+        help="identifier shared by related evaluation conditions",
+    )
+    p.add_argument(
+        "--episode-id",
+        default=env("EDGEPROXY_EPISODE_ID"),
+        help="identifier shared by every call in one workload condition",
+    )
     p.add_argument(
         "--vllm-url",
         default=env("EDGEPROXY_VLLM_URL", "http://localhost:8001"),
@@ -171,6 +183,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         gpu_index=a.gpu_index,
         kv_bytes_per_token=a.kv_bytes_per_token,
         cloud_cache_tracking=a.cloud_cache_tracking,
+        experiment_id=a.experiment_id,
+        episode_id=a.episode_id,
         local_cache_tracking=a.local_cache_tracking,
         max_local_tokens=a.max_local_tokens,
         local_token_margin=a.local_token_margin,

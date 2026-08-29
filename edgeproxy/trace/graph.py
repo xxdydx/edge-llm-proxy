@@ -50,6 +50,8 @@ def _normalise(record: dict[str, Any], stream_parents: dict[str, str]) -> dict[s
     explicit_parent = causality.get("agent_parent_tool_use_id")
     return {
         "call_id": str(call.get("call_id") or record.get("id")),
+        "experiment_id": call.get("experiment_id", record.get("experiment_id")),
+        "episode_id": call.get("episode_id", record.get("episode_id")),
         "session_id": str(
             call.get("session_id")
             or headers.get("x-claude-code-session-id")
@@ -134,6 +136,8 @@ def build_trace_graph(
             "id": call_key,
             "type": "call",
             "call_id": row["call_id"],
+            "experiment_id": row["experiment_id"],
+            "episode_id": row["episode_id"],
             "session_id": session,
             "agent_id": agent,
             "timestamp_unix_s": row["timestamp_unix_s"],
@@ -239,6 +243,16 @@ def build_trace_graph(
 
     return {
         "schema_version": "edgeproxy.trace_graph.v1",
+        "experiment_ids": sorted(
+            {
+                str(row["experiment_id"])
+                for row in normalised
+                if row["experiment_id"]
+            }
+        ),
+        "episode_ids": sorted(
+            {str(row["episode_id"]) for row in normalised if row["episode_id"]}
+        ),
         "nodes": sorted(nodes.values(), key=lambda node: node["id"]),
         "edges": [
             {"source": source, "target": target, "type": kind}

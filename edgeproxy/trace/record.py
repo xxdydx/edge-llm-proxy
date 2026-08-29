@@ -285,6 +285,8 @@ def build_structured_call(
         "schema_version": "edgeproxy.call.v1",
         "timestamp_unix_s": record.get("ts"),
         "call_id": record.get("id"),
+        "experiment_id": record.get("experiment_id"),
+        "episode_id": record.get("episode_id"),
         "session_id": session_id,
         **identity,
         "backend": placement,

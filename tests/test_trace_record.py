@@ -89,6 +89,8 @@ class TraceRecordTests(unittest.TestCase):
         record = {
             "id": "call-1",
             "ts": 1.5,
+            "experiment_id": "fanout-1",
+            "episode_id": "fanout-1-routing",
             "placement": "cloud",
             "backend": "https://cloud.test",
             "status": 200,
@@ -126,6 +128,8 @@ class TraceRecordTests(unittest.TestCase):
         call = build_structured_call(record, request)
 
         self.assertEqual(call["schema_version"], "edgeproxy.call.v1")
+        self.assertEqual(call["experiment_id"], "fanout-1")
+        self.assertEqual(call["episode_id"], "fanout-1-routing")
         self.assertEqual(call["backend"], "cloud")
         self.assertEqual(call["tokens"]["prompt_tokens_exact"], 120)
         self.assertEqual(call["tokens"]["cache_read_tokens"], 100)

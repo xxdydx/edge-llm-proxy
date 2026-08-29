@@ -181,6 +181,8 @@ def make_app(cfg: Config) -> FastAPI:
             "status": "ok",
             "upstream": cfg.upstream,
             "trace_dir": str(cfg.trace_dir),
+            "experiment_id": cfg.experiment_id,
+            "episode_id": cfg.episode_id,
             "cloud_cache_tracking": cfg.cloud_cache_tracking,
             "local_cache_tracking": cfg.local_cache_tracking,
             "max_local_tokens": cfg.max_local_tokens,
@@ -332,6 +334,8 @@ def make_app(cfg: Config) -> FastAPI:
             "reason": reason,
             "reason_detail": detail,
             "policy": policy.name,
+            "experiment_id": cfg.experiment_id,
+            "episode_id": cfg.episode_id,
             "clamped_max_tokens": clamped_to,
             "requested_max_tokens": requested_max_tokens,
             "effective_max_tokens": (

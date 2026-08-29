@@ -75,11 +75,17 @@ class RouterConfigurationTests(unittest.TestCase):
                 "0.9",
                 "--local-output-reserve-tokens",
                 "0",
+                "--experiment-id",
+                "fanout-1",
+                "--episode-id",
+                "fanout-1-routing",
             ]
         )
         self.assertEqual(config.max_local_tokens, 100_000)
         self.assertEqual(config.local_token_margin, 0.9)
         self.assertEqual(config.local_output_reserve_tokens, 0)
+        self.assertEqual(config.experiment_id, "fanout-1")
+        self.assertEqual(config.episode_id, "fanout-1-routing")
 
     def test_proxy_cli_rejects_invalid_margin(self):
         with self.assertRaises(SystemExit):
