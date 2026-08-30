@@ -79,6 +79,10 @@ class RouterConfigurationTests(unittest.TestCase):
                 "fanout-1",
                 "--episode-id",
                 "fanout-1-routing",
+                "--cohort-tracking",
+                "observe",
+                "--cohort-window-ms",
+                "200",
             ]
         )
         self.assertEqual(config.max_local_tokens, 100_000)
@@ -86,6 +90,8 @@ class RouterConfigurationTests(unittest.TestCase):
         self.assertEqual(config.local_output_reserve_tokens, 0)
         self.assertEqual(config.experiment_id, "fanout-1")
         self.assertEqual(config.episode_id, "fanout-1-routing")
+        self.assertEqual(config.cohort_tracking, "observe")
+        self.assertEqual(config.cohort_window_ms, 200)
 
     def test_proxy_cli_rejects_invalid_margin(self):
         with self.assertRaises(SystemExit):
@@ -94,6 +100,10 @@ class RouterConfigurationTests(unittest.TestCase):
     def test_proxy_cli_rejects_negative_output_reserve(self):
         with self.assertRaises(SystemExit):
             parse_args(["--local-output-reserve-tokens", "-1"])
+
+    def test_proxy_cli_rejects_negative_cohort_window(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--cohort-window-ms", "-1"])
 
     def test_security_monitor_feature_is_detected_from_system_blocks(self):
         features = router.extract_features(

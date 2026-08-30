@@ -1,6 +1,6 @@
 import unittest
 
-from edgeproxy.trace.graph import build_trace_graph, render_tree
+from edgeproxy.trace.graph import build_trace_graph, render_mermaid, render_tree
 
 
 class TraceGraphTests(unittest.TestCase):
@@ -44,14 +44,11 @@ class TraceGraphTests(unittest.TestCase):
 
         graph = build_trace_graph(records, stream_events=stream)
 
-        self.assertIn(
-            {
-                "source": "tool:tool_A",
-                "target": "agent:session-1:child_1",
-                "type": "spawned_agent",
-            },
-            graph["edges"],
-        )
+        spawn = next(edge for edge in graph["edges"] if edge["type"] == "spawned_agent")
+        self.assertEqual(spawn["source"], "tool:tool_A")
+        self.assertEqual(spawn["target"], "agent:session-1:child_1")
+        self.assertEqual(spawn["detection_method"], "ground_truth_stream")
+        self.assertEqual(spawn["detection_confidence"], "exact")
         self.assertEqual(graph["unresolved"], [])
         self.assertEqual(
             render_tree(graph),
@@ -114,6 +111,132 @@ class TraceGraphTests(unittest.TestCase):
         self.assertEqual(
             build_trace_graph([first, second]), build_trace_graph([second, first])
         )
+
+    def test_content_linking_builds_cohort_and_cache_edges_without_ground_truth(self):
+        prompt = "Inspect the router and report its placement invariants."
+        parent = {
+            "id": "parent",
+            "ts": 1.0,
+            "placement": "cloud",
+            "headers": {"x-claude-code-session-id": "session-1"},
+            "request": {"system": "shared", "messages": [{"content": "root"}]},
+            "response": {
+                "id": "parent-message",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "agent-tool",
+                        "name": "Agent",
+                        "input": {"prompt": prompt},
+                    }
+                ],
+            },
+        }
+        child = {
+            "id": "child",
+            "ts": 1.037,
+            "placement": "local",
+            "status": 200,
+            "headers": {
+                "x-claude-code-session-id": "session-1",
+                "x-claude-code-agent-id": "child-1",
+            },
+            "request": {
+                "system": "shared",
+                "messages": [{"content": f"Delegation: {prompt}"}],
+            },
+            "response": {"id": "child-message", "content": []},
+        }
+
+        graph = build_trace_graph([parent, child])
+
+        spawn = next(edge for edge in graph["edges"] if edge["type"] == "spawned_agent")
+        self.assertEqual(spawn["detection_method"], "content_exact")
+        self.assertEqual(spawn["detection_confidence"], "high")
+        self.assertIn("structural_shared_prefix_chars", spawn["cache_relationship"])
+        self.assertEqual(graph["cohorts"][0]["expected_width"], 1)
+        self.assertEqual(graph["cohorts"][0]["arrival_span_ms"], 0.0)
+        self.assertTrue(graph["cohorts"][0]["primary_case"])
+
+    def test_content_linker_is_scored_against_stream_ground_truth(self):
+        prompt = "Inspect one file."
+        records = [
+            {
+                "id": "parent",
+                "ts": 1.0,
+                "headers": {"x-claude-code-session-id": "s"},
+                "request": {},
+                "response": {
+                    "id": "m-parent",
+                    "content": [{
+                        "type": "tool_use", "id": "t", "name": "Agent",
+                        "input": {"prompt": prompt},
+                    }],
+                },
+            },
+            {
+                "id": "child",
+                "ts": 2.0,
+                "headers": {
+                    "x-claude-code-session-id": "s",
+                    "x-claude-code-agent-id": "a",
+                },
+                "request": {"messages": [{"content": prompt}]},
+                "response": {"id": "m-child", "content": []},
+            },
+        ]
+        graph = build_trace_graph(
+            records,
+            stream_events=[{"parent_tool_use_id": "t", "message": {"id": "m-child"}}],
+        )
+
+        self.assertEqual(graph["linker_validation"]["accuracy"], 1.0)
+        self.assertEqual(graph["linker_validation"]["false_cohort_rate"], 0.0)
+
+    def test_all_failed_children_are_excluded_from_arrival_distribution(self):
+        graph = build_trace_graph([{
+            "id": "failed", "ts": 1.0, "status": 502,
+            "headers": {
+                "x-claude-code-session-id": "s",
+                "x-claude-code-agent-id": "a",
+            },
+            "request": {}, "response": {},
+        }])
+
+        self.assertFalse(graph["analysis_eligibility"]["arrival_distribution_eligible"])
+        self.assertEqual(
+            graph["analysis_eligibility"]["exclusion_reason"], "all_child_calls_failed"
+        )
+
+    def test_mermaid_is_deterministic_and_contains_edge_cache_metrics(self):
+        prompt = "Inspect."
+        records = [
+            {
+                "id": "p", "ts": 1.0, "placement": "cloud",
+                "headers": {"x-claude-code-session-id": "s"},
+                "request": {"system": "shared"},
+                "response": {"content": [{
+                    "type": "tool_use", "id": "t", "name": "Agent",
+                    "input": {"prompt": prompt},
+                }]},
+            },
+            {
+                "id": "c", "ts": 1.01, "placement": "local", "status": 200,
+                "headers": {
+                    "x-claude-code-session-id": "s",
+                    "x-claude-code-agent-id": "a",
+                },
+                "request": {"system": "shared", "messages": [{"content": prompt}]},
+                "response": {"content": []},
+            },
+        ]
+        graph = build_trace_graph(records)
+
+        rendered = render_mermaid(graph)
+        self.assertEqual(rendered, render_mermaid(graph))
+        self.assertTrue(rendered.startswith("flowchart LR\n"))
+        self.assertIn("structural ~", rendered)
+        self.assertIn("link high", rendered)
 
 
 if __name__ == "__main__":

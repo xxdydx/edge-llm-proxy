@@ -315,6 +315,7 @@ def build_structured_call(
             "reserve_tokens": record.get("output_reserve_tokens"),
         },
         "tool_use_blocks": tool_use_blocks,
+        "cohort": record.get("cohort_detection"),
         "causality": {
             "agent_id": str(agent_id) if agent_id else None,
             "agent_parent_tool_use_id": _agent_parent_tool_use_id(

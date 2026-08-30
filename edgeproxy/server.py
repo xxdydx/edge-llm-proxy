@@ -33,6 +33,7 @@ from .cloud_cache import (
 )
 from .cost import build_cost_savings
 from .config import Config, parse_args
+from .cohort import CohortTracker
 from .local_cache import LocalCachePrediction, local_cache_trace, probe_local_cache
 from .shaping import LinkMonitor, LinkShaper
 from .telemetry import LocalResourceSampler
@@ -118,6 +119,7 @@ def _usage_of(payload: Any) -> dict[str, Any]:
 def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
     cloud_tracker = CloudCacheTracker()
+    cohort_tracker = CohortTracker(window_ms=cfg.cohort_window_ms)
 
     policy = router.build(
         cfg.policy,
@@ -183,6 +185,8 @@ def make_app(cfg: Config) -> FastAPI:
             "trace_dir": str(cfg.trace_dir),
             "experiment_id": cfg.experiment_id,
             "episode_id": cfg.episode_id,
+            "cohort_tracking": cfg.cohort_tracking,
+            "cohort_window_ms": cfg.cohort_window_ms,
             "cloud_cache_tracking": cfg.cloud_cache_tracking,
             "local_cache_tracking": cfg.local_cache_tracking,
             "max_local_tokens": cfg.max_local_tokens,
@@ -235,9 +239,16 @@ def make_app(cfg: Config) -> FastAPI:
         cloud_chain: PrefixChain | None = None
         cloud_prediction: CloudCachePrediction | None = None
         local_prediction: LocalCachePrediction | None = None
+        cohort_detection: dict[str, Any] | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
                 session = request.headers.get("x-claude-code-session-id")
+                if cfg.cohort_tracking == "observe":
+                    cohort_detection = cohort_tracker.match_child(
+                        session_id=session,
+                        request=original_request_json,
+                        arrived_at_unix_s=time.time(),
+                    )
                 gap = None
                 if session:
                     now = time.time()
@@ -349,6 +360,7 @@ def make_app(cfg: Config) -> FastAPI:
             "strict_tools_added": strict_tools_added,
             "backend": cfg.backends[placement],
             "features": feature_dict,
+            "cohort_detection": cohort_detection,
             "headers": redact_headers(request.headers),
             "request": request_json,
             # Present even on transport/provider errors so downstream analysis
@@ -359,6 +371,18 @@ def make_app(cfg: Config) -> FastAPI:
 
         def finalize_structured_call() -> None:
             try:
+                if cfg.cohort_tracking == "observe":
+                    parent_detection = cohort_tracker.observe_parent(
+                        call_id=str(record["id"]),
+                        session_id=(record.get("headers") or {}).get(
+                            "x-claude-code-session-id"
+                        ),
+                        backend=record.get("placement"),
+                        response=record.get("response"),
+                        completed_at_unix_s=time.time(),
+                    )
+                    if parent_detection is not None:
+                        record["cohort_detection"] = parent_detection
                 record["call"] = build_structured_call(record, original_request_json)
             except Exception:
                 # Trace enrichment must never interrupt a proxied response.

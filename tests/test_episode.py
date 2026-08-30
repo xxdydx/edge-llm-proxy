@@ -90,6 +90,40 @@ class EpisodeTests(unittest.TestCase):
         )
         self.assertEqual(metadata["checkpointing"]["latest_checkpoint_id"], "green")
 
+    def test_capture_records_prompt_free_validation_lineage_only(self):
+        metadata = capture_episode_metadata(
+            [
+                {
+                    "type": "assistant",
+                    "session_id": "session-1",
+                    "parent_tool_use_id": "agent-tool",
+                    "message": {"id": "child-message", "content": "private prompt"},
+                },
+                {
+                    "type": "assistant",
+                    "session_id": "session-1",
+                    "parent_tool_use_id": "agent-tool",
+                    "message": {"id": "child-message", "content": "private prompt"},
+                },
+            ],
+            experiment_id="experiment-1",
+            episode_id="episode-1",
+            condition="routing",
+            expected_session_id="session-1",
+        )
+
+        lineage = metadata["lineage_ground_truth"]
+        self.assertTrue(lineage["available"])
+        self.assertFalse(lineage["routing_input"])
+        self.assertEqual(
+            lineage["links"],
+            [{
+                "child_message_id": "child-message",
+                "parent_tool_use_id": "agent-tool",
+            }],
+        )
+        self.assertNotIn("private prompt", str(metadata))
+
     def test_capture_rejects_a_different_session(self):
         with self.assertRaisesRegex(ValueError, "did not match"):
             capture_episode_metadata(

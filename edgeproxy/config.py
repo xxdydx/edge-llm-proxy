@@ -35,6 +35,8 @@ class Config:
     cloud_cache_tracking: str
     experiment_id: str | None = None
     episode_id: str | None = None
+    cohort_tracking: str = "off"
+    cohort_window_ms: float = 200.0
     local_cache_tracking: str = "off"
     max_local_tokens: int = 60_000
     local_token_margin: float = 0.9
@@ -120,6 +122,18 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="probe live vLLM prefix residency before placement",
     )
     p.add_argument(
+        "--cohort-tracking",
+        default=env("EDGEPROXY_COHORT_TRACKING", "off"),
+        choices=["off", "observe"],
+        help="infer fan-out cohorts for tracing without changing placement",
+    )
+    p.add_argument(
+        "--cohort-window-ms",
+        type=float,
+        default=float(env("EDGEPROXY_COHORT_WINDOW_MS", "200")),
+        help="measured fan-out collection window recorded by observe mode",
+    )
+    p.add_argument(
         "--max-local-tokens",
         type=int,
         default=int(env("EDGEPROXY_MAX_LOCAL_TOKENS", "60000")),
@@ -159,6 +173,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         p.error("--local-token-margin must be greater than 0 and at most 1")
     if a.local_output_reserve_tokens < 0:
         p.error("--local-output-reserve-tokens must be non-negative")
+    if a.cohort_window_ms < 0:
+        p.error("--cohort-window-ms must be non-negative")
 
     # Preset supplies the defaults; the explicit flags win where given.
     base = LinkShaper.from_preset(a.link_preset)
@@ -185,6 +201,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         cloud_cache_tracking=a.cloud_cache_tracking,
         experiment_id=a.experiment_id,
         episode_id=a.episode_id,
+        cohort_tracking=a.cohort_tracking,
+        cohort_window_ms=a.cohort_window_ms,
         local_cache_tracking=a.local_cache_tracking,
         max_local_tokens=a.max_local_tokens,
         local_token_margin=a.local_token_margin,

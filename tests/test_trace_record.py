@@ -123,6 +123,10 @@ class TraceRecordTests(unittest.TestCase):
             },
             "timing": {"ttft_ms": 25.0, "output_tokens_per_s": 80.0},
             "cloud_cache": {"prediction": {}, "actual": {}},
+            "cohort_detection": {
+                "cohort_id": "cohort-1",
+                "detection_confidence": "high",
+            },
         }
 
         call = build_structured_call(record, request)
@@ -136,6 +140,7 @@ class TraceRecordTests(unittest.TestCase):
         self.assertEqual(call["tokens"]["cache_write_tokens"], 16)
         self.assertEqual(call["timing"]["decode_tokens_per_s"], 80.0)
         self.assertEqual(call["cache_probe"], record["cloud_cache"])
+        self.assertEqual(call["cohort"], record["cohort_detection"])
         self.assertEqual(call["output_limit"]["effective_max_tokens"], 20_000)
         self.assertEqual(call["causality"]["agent_id"], "agent-1")
         self.assertEqual(

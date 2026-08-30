@@ -51,10 +51,27 @@ def capture_episode_metadata(
     session_ids: list[str] = []
     checkpoints: list[dict[str, Any]] = []
     seen_checkpoints: set[str] = set()
+    lineage_links: list[dict[str, str]] = []
+    seen_lineage_links: set[tuple[str, str]] = set()
     for event in events:
         session_id = event.get("session_id")
         if session_id and str(session_id) not in session_ids:
             session_ids.append(str(session_id))
+        message = event.get("message")
+        message_id = message.get("id") if isinstance(message, dict) else None
+        parent_tool_use_id = event.get("parent_tool_use_id")
+        if parent_tool_use_id is None and isinstance(message, dict):
+            parent_tool_use_id = message.get("parent_tool_use_id")
+        if message_id and parent_tool_use_id:
+            key = (str(message_id), str(parent_tool_use_id))
+            if key not in seen_lineage_links:
+                seen_lineage_links.add(key)
+                lineage_links.append(
+                    {
+                        "child_message_id": key[0],
+                        "parent_tool_use_id": key[1],
+                    }
+                )
         if (
             event.get("type") != "user"
             or event.get("parent_tool_use_id") is not None
@@ -91,6 +108,17 @@ def capture_episode_metadata(
         "condition": condition,
         "claude_session_id": claude_session_id,
         "working_directory": working_directory,
+        "lineage_ground_truth": {
+            "source": "claude_stream_validation_only",
+            "available": bool(lineage_links),
+            "routing_input": False,
+            "links": sorted(
+                lineage_links,
+                key=lambda link: (
+                    link["parent_tool_use_id"], link["child_message_id"]
+                ),
+            ),
+        },
         "checkpointing": {
             "provider": "claude-code",
             "tracks": ["Write", "Edit", "NotebookEdit"],

@@ -108,6 +108,8 @@ start_proxy() {
     --trace-dir "$trace_dir" \
     --experiment-id "$experiment_id" \
     --episode-id "$episode_id" \
+    --cohort-tracking observe \
+    --cohort-window-ms "${EDGEPROXY_COHORT_WINDOW_MS:-200}" \
     --policy "$policy" \
     --local-cache-tracking observe \
     --cloud-cache-tracking observe \
@@ -183,7 +185,7 @@ run_condition() (
   local trace_source
   local trace_dest="$trace_root/${label}_${run_stamp}.jsonl"
   local trace_graph="$trace_root/${label}_${run_stamp}.graph.json"
-  local trace_tree="$trace_root/${label}_${run_stamp}.tree.txt"
+  local trace_mermaid="$trace_root/${label}_${run_stamp}.mmd"
   local episode_id="${experiment_id}-${label}"
   local episode_metadata="$result_root/${label}_episode_${run_stamp}.json"
   local claude_session_id
@@ -250,11 +252,11 @@ run_condition() (
   "$python_bin" -m edgeproxy.trace.graph "$trace_dest" \
     --claude-stream "$claude_stream" \
     --json-output "$trace_graph" \
-    --tree-output "$trace_tree"
+    --mermaid-output "$trace_mermaid"
   [ -s "$trace_graph" ] || die "$label trace graph was not created"
-  [ -s "$trace_tree" ] || die "$label trace tree was not created"
+  [ -s "$trace_mermaid" ] || die "$label Mermaid trace was not created"
   echo "==> saved $label trace graph: $trace_graph"
-  echo "==> saved $label trace tree:  $trace_tree"
+  echo "==> saved $label Mermaid trace: $trace_mermaid"
 
   stop_pid "$pid"
   pid=""

@@ -289,33 +289,47 @@ a divergence that was fine, and the number that makes the paper credible.
 - **Deliverable**: Pareto plot vs. cloud-only / local-only / oracle, plus
   divergence-horizon survival curves per policy.
 
-### Weeks 7–10 — Tier 2: cohort-sequential cache-routing coupling
+### Weeks 7–10 — Tier 2: call-cohort cache/queue routing
 
 The core idea, stated precisely:
 
-> For a fan-out cohort of N siblings sharing ancestor prefix P, myopic per-call
-> routing is globally suboptimal. Serving sibling #1 locally pays a one-time
-> `|P|`-token prefill that all N−1 later siblings amortize. A myopic router
-> prices that prefill against sibling #1 alone, judges local too slow, and sends
-> it to cloud — after which sibling #2 faces the identical cold cache, and the
-> whole cohort leaks to cloud.
+> A routing decision is made over a call cohort and its evolving execution
+> state, not an isolated prompt. Placement changes cache residency and queue
+> state for siblings and later waves, so the complete agent-turn makespan/cost
+> can disagree with the sum of independently optimal call decisions.
 
-It's an investment problem: the action changes the state, and the reward is
-state-dependent. That framing is also the on-ramp to Tier 4 if you ever want it.
+The cohort width is empirical, never fixed at five. The planner jointly scores
+the currently ready calls; late joiners replan against updated state, and
+already dispatched calls are never recalled. Quality is deliberately excluded
+from this cohort-policy experiment for now.
 
-**Getting fan-out**: Claude Code's subagent/Task tool spawns siblings off a
-shared ancestor context — that's a real cohort, and the natural source. Record
-those traces, then synthesize controlled cohorts from them for the sweep.
+**Getting fan-out**: Claude Code's `Agent` tool spawns siblings off a shared
+ancestor context. Existing cloud-parent traces show genuine waves spanning
+5–37 ms. Start with cloud-parent fan-outs; re-measure local parents after strict
+decoding and shortened delegation prompts. Infer lineage from exact delegation
+text in proxied child requests, and use runner-provided parent IDs only to score
+inference accuracy/false-cohort rate—not as a routing input.
 
-**Experiment**: sweep cohort width `N` × shared prefix length `|P|` × local load
-× link RTT. Compare four policies:
+The trace graph sidecar and Mermaid renderer are the first implementation
+layer. Their parent/sibling edges distinguish structural prefix overlap,
+prospective cache state, and realised reuse. Cohort detection is initially
+observe-only with a 200 ms recorded window and zero actual wait. Before enabling
+admission delay, fit the window from a larger arrival distribution and charge
+the entire wait to every latency number.
+
+**Experiment**: sweep measured cohort width `N` × shared prefix length `|P|` ×
+local load × link RTT. Exhaustively enumerate `2^N` local/cloud vectors for
+small ready cohorts, then replan on completions/late arrivals. Compare:
 
 | Policy | Description |
 | --- | --- |
 | cloud-only / local-only | baselines |
 | myopic | per-call optimal given current cache state |
-| cohort-aware | lookahead over remaining siblings |
+| cohort-aware | joint ready-wave placement plus stateful replanning |
 | oracle | exhaustive over the cohort's placements |
+
+Add the decisive live ablation: replace a real fan-out with independent calls
+of the same lengths. This isolates graph/cache externalities from request size.
 
 **Headline figure**: heatmap over `(N, |P|)` of cohort-aware improvement over
 myopic, with the region where myopic collapses to cloud-only marked. Expect an
@@ -328,6 +342,10 @@ best policy is a mix, which makes the curve interesting rather than monotone.
   result.
 - Sibling suffix heterogeneity — vary independently of `|P|`.
 - Arrival timing — simultaneous vs. staggered fan-out change the answer.
+- Cohort-linking errors — report coverage, confidence, and false-cohort rate
+  against validation-only ground truth.
+- Failed traces — exclude all-failed child traffic from arrival distributions;
+  the 16-August 110×502 trace may inform parent launch shape only.
 
 **Ablation worth doing**: derive a closed-form threshold from the analytical
 model (when does amortized prefill beat N cloud calls?) and show the empirical
