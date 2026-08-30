@@ -235,6 +235,10 @@ class TraceGraphTests(unittest.TestCase):
         rendered = render_mermaid(graph)
         self.assertEqual(rendered, render_mermaid(graph))
         self.assertTrue(rendered.startswith("flowchart LR\n"))
+        self.assertIn("classDef agentNode", rendered)
+        self.assertIn("classDef callNode", rendered)
+        self.assertIn("classDef toolNode", rendered)
+        self.assertNotIn("classDef call fill", rendered)
         self.assertIn("structural ~", rendered)
         self.assertIn("link high", rendered)
 

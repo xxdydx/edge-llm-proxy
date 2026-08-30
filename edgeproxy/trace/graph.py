@@ -855,15 +855,15 @@ def render_mermaid(graph: dict[str, Any]) -> str:
 
     output.extend(
         [
-            "  classDef agent fill:#e8f1ff,stroke:#3563a9,color:#10233f",
-            "  classDef call fill:#fff7df,stroke:#9b7326,color:#35260c",
-            "  classDef tool fill:#e9f8ee,stroke:#39764a,color:#15301d",
+            "  classDef agentNode fill:#e8f1ff,stroke:#3563a9,color:#10233f",
+            "  classDef callNode fill:#fff7df,stroke:#9b7326,color:#35260c",
+            "  classDef toolNode fill:#e9f8ee,stroke:#39764a,color:#15301d",
         ]
     )
     for node_type, class_name in (
-        ("agent", "agent"),
-        ("call", "call"),
-        ("tool_use", "tool"),
+        ("agent", "agentNode"),
+        ("call", "callNode"),
+        ("tool_use", "toolNode"),
     ):
         ids = [_mermaid_id(node["id"]) for node in nodes if node.get("type") == node_type]
         if ids:
