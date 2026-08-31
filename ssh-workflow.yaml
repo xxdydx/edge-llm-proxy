@@ -12,8 +12,10 @@ spec:
   # Pinned by digest, not by tag. A digest is the image's content hash, so there
   # is no tag indirection and no chance of a worker serving a cached older build
   # under the same name. Update this whenever the image is rebuilt.
-  # Built from commit d4f1f6f — linux/amd64, includes build-essential for Triton.
-  image: ghcr.io/xxdydx/edge-llm-dev@sha256:c73a1a4a77e73ee9882468865f3ca2cef34631bffd595fa41de9c56904b9ba5c
+  # Built from commit 965cd90 plus an uncommitted Dockerfile change (adds
+  # pytest, jsonschema, nvidia-ml-py to the baked-in /opt/venv) — commit that
+  # change to make this pin match a real commit.
+  image: ghcr.io/xxdydx/edge-llm-dev@sha256:500a0d2f1f3674ec04ca79b51f0118f600aeef0c148389990aeeb0353c713cc1
   authorizedKeys:
     - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtYUOhUWEINIqO6vSah1/v+c//g0Hd6aqO1CM55twi9 official@arul.me
   resources:

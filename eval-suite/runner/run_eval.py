@@ -317,9 +317,11 @@ def collect_trace(ctx: RunContext, trace_dir: Path, claude_stream_path: Path):
     return trace_dest, (graph_dest if graph_dest.exists() else None)
 
 
-def run_checker(task: TaskSpec, sandbox_dir: Path, report_path: Path, verdict_path: Path) -> dict[str, Any]:
+def run_checker(
+    python_bin: str, task: TaskSpec, sandbox_dir: Path, report_path: Path, verdict_path: Path
+) -> dict[str, Any]:
     cmd = [
-        sys.executable,
+        python_bin,
         str(task.checker_path),
         "--sandbox",
         str(sandbox_dir),
@@ -376,7 +378,7 @@ def run_job(ctx: RunContext, job: Job) -> JobResult:
         report_text = extract_report_text(job.task, events)
         report_path.write_text(report_text, encoding="utf-8")
         trace_dest, graph_dest = collect_trace(ctx, trace_dir, stream_path)
-        verdict = run_checker(job.task, sandbox_dir, report_path, verdict_path)
+        verdict = run_checker(ctx.python_bin, job.task, sandbox_dir, report_path, verdict_path)
     except Exception as exc:  # noqa: BLE001 - one bad job must not sink the campaign
         error = f"{type(exc).__name__}: {exc}"
     finally:

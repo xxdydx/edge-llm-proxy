@@ -66,11 +66,14 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     PATH=/usr/local/cuda/bin:/opt/venv/bin:/usr/local/bin:$PATH
 
 # Python plus the proxy's own dependencies. These are small, stable, and needed
-# every session — unlike vLLM, they are worth baking in.
+# every session — unlike vLLM, they are worth baking in. pytest is a dev
+# dependency, not a runtime one (deliberately absent from pyproject.toml), but
+# tests/ and eval-suite/ both shell out to it, so a fresh box has no other
+# chance to get it before those are run.
 RUN uv python install 3.12 \
     && uv venv /opt/venv --python 3.12 \
     && uv pip install --python /opt/venv/bin/python \
-        fastapi 'uvicorn[standard]' httpx
+        fastapi 'uvicorn[standard]' httpx jsonschema nvidia-ml-py pytest
 
 # Node, from the official tarball rather than apt — Debian's package trails
 # several major versions, and agents that shell out to node/npx expect current
