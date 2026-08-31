@@ -11,6 +11,12 @@
 traces/
 *.jsonl
 
+# eval-suite campaign output: sandboxes, proxy logs, verdicts, and traces for
+# every job. Same sensitivity as traces/ above - keep the tasks/ source but
+# not run artifacts.
+eval-suite/results/*
+!eval-suite/results/.gitkeep
+
 # ---- python --------------------------------------------------------------
 __pycache__/
 *.py[cod]

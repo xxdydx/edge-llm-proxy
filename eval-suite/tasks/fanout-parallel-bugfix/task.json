@@ -1,0 +1,12 @@
+{
+  "id": "fanout-parallel-bugfix",
+  "category": "fanout",
+  "summary": "Forced three-way concurrent subagent bugfix over three independent, non-overlapping modules.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": true,
+  "timeout_s": 600,
+  "tags": ["fanout", "agent", "bugfix", "unit-test"]
+}

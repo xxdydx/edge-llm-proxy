@@ -1,0 +1,4 @@
+{
+  "total_public_functions": 9,
+  "packages_without_tests": ["notifications"]
+}

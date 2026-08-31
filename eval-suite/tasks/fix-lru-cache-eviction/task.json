@@ -1,0 +1,12 @@
+{
+  "id": "fix-lru-cache-eviction",
+  "category": "edit",
+  "summary": "Fix an LRU cache whose get() does not refresh recency, so reads never protect a key from eviction.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": false,
+  "fanout_required": false,
+  "timeout_s": 300,
+  "tags": ["edit", "bugfix", "unit-test"]
+}

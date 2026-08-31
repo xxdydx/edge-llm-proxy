@@ -1,0 +1,12 @@
+{
+  "id": "fix-null-handling",
+  "category": "edit",
+  "summary": "Fix a KeyError crash when scanning records for the first usable email address.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": false,
+  "fanout_required": false,
+  "timeout_s": 300,
+  "tags": ["edit", "bugfix", "unit-test"]
+}

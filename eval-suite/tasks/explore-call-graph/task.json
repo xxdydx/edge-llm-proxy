@@ -1,0 +1,12 @@
+{
+  "id": "explore-call-graph",
+  "category": "exploration",
+  "summary": "Read-only call-site tracing through a small pipeline package, resistant to naive grep counting.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": false,
+  "timeout_s": 240,
+  "tags": ["read-only", "call-graph", "comprehension"]
+}

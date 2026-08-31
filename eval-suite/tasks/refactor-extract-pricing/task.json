@@ -1,0 +1,12 @@
+{
+  "id": "refactor-extract-pricing",
+  "category": "refactor",
+  "summary": "Extract inline pricing math into a named function without changing behavior.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": false,
+  "fanout_required": false,
+  "timeout_s": 300,
+  "tags": ["refactor", "extract-function", "unit-test"]
+}

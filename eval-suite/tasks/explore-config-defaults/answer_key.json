@@ -1,0 +1,4 @@
+{
+  "distinct_exception_types_caught": 3,
+  "unknown_key_raiser": "settings.load_settings"
+}

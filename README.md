@@ -393,6 +393,21 @@ fields are the authoritative per-request observation. Neither source predicts
 whether the incoming request will hit before it is routed; that still requires
 the planned shadow radix tracker or cache probe.
 
+`local_resources.gpu` is sampled through NVML in the same background task. In
+addition to whole-device VRAM allocation, it records:
+
+- `sm_utilization_pct` and `memory_controller_utilization_pct`;
+- graphics, SM, and memory clocks in MHz;
+- power draw and enforced/management limit in watts;
+- GPU temperature in Celsius;
+- the raw current clock-event bitmask and decoded event/throttle reasons.
+
+The NVML `gpu` utilization value is named `sm_utilization_pct` here to match
+the `nvidia-smi dmon` `sm` column: it measures the percentage of the sample
+period with at least one executing kernel, not per-SM occupancy. Unsupported
+device/driver fields remain present as `null`, and unknown future clock-event
+bits are retained as `unknown_0x...` instead of being discarded.
+
 Quick check against a running box:
 
 ```bash

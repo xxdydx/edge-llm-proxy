@@ -1,0 +1,12 @@
+{
+  "id": "refactor-rename-for-clarity",
+  "category": "refactor",
+  "summary": "Rename an ambiguously-named function consistently across import/call sites without changing behavior.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": false,
+  "fanout_required": false,
+  "timeout_s": 300,
+  "tags": ["refactor", "rename", "unit-test"]
+}

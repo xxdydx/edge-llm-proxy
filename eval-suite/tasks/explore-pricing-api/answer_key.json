@@ -1,0 +1,4 @@
+{
+  "discounts_public_functions": ["apply_discounts", "bulk_discount_rate", "loyalty_discount_rate"],
+  "mutator": "cart.merge_carts"
+}

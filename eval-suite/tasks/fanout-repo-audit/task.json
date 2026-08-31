@@ -1,0 +1,12 @@
+{
+  "id": "fanout-repo-audit",
+  "category": "fanout",
+  "summary": "Forced three-way concurrent subagent audit of a small codebase, graded on report shape plus an exact answer key.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": true,
+  "timeout_s": 600,
+  "tags": ["fanout", "agent", "read-only", "comprehension"]
+}

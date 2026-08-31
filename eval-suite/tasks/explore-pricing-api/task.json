@@ -1,0 +1,12 @@
+{
+  "id": "explore-pricing-api",
+  "category": "exploration",
+  "summary": "Read-only exploration of a small pricing package, graded against an exact answer key.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": false,
+  "timeout_s": 240,
+  "tags": ["read-only", "grep", "comprehension"]
+}

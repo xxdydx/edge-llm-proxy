@@ -1,0 +1,12 @@
+{
+  "id": "explore-config-defaults",
+  "category": "exploration",
+  "summary": "Read-only exploration of exception handling and defaults in a small config package.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": false,
+  "timeout_s": 240,
+  "tags": ["read-only", "grep", "comprehension"]
+}
