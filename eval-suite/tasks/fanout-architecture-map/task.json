@@ -1,0 +1,12 @@
+{
+  "id": "fanout-architecture-map",
+  "category": "fanout",
+  "summary": "Hard tier: exactly three concurrent subagents read a 9-module, ~370-line codebase and consolidate an architecture map, requiring genuine cross-agent synthesis.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": true,
+  "fanout_required": true,
+  "timeout_s": 900,
+  "tags": ["hard", "fanout", "agent", "read-only", "large-context"]
+}

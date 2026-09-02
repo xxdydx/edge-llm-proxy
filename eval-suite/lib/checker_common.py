@@ -35,6 +35,20 @@ def result(passed: bool, score: float, reason: str, **details: Any) -> dict[str,
     }
 
 
+def normalize_qualname(value: str) -> str:
+    """Collapse a "package.module.function" or "module.function" answer to
+    "module.function" by keeping only the last two dot-separated segments.
+
+    Exploration-task answer keys use the bare module.function form, but
+    "package.module.function" is equally correct Python terminology (it's
+    the real importable path), and models answer with either form
+    interchangeably. Comparing normalized values on both sides accepts both
+    without the answer key needing to special-case either one.
+    """
+    parts = value.strip().split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else value.strip()
+
+
 def extract_answer_json(report_text: str) -> dict[str, Any] | None:
     """Pull the JSON object a task's answer block, or first ```json fence."""
     marked = re.search(
@@ -92,7 +106,14 @@ def run_pytest(
     """Run pytest inside sandbox_dir and return exit code, JUnit counts, and output tails."""
     python_bin = python_bin or sys.executable
     junit_path = sandbox_dir / ".eval_junit.xml"
-    cmd = [python_bin, "-m", "pytest", "-q", f"--junitxml={junit_path}"]
+    cmd = [
+        python_bin,
+        "-m",
+        "pytest",
+        "-q",
+        "--continue-on-collection-errors",
+        f"--junitxml={junit_path}",
+    ]
     if args:
         cmd.extend(args)
     try:

@@ -20,7 +20,10 @@ def check(sandbox: Path, fixture: Path, report_text: str) -> dict:
     want_mutator = answer_key["mutator"]
 
     functions_ok = isinstance(got_functions, list) and [str(x) for x in got_functions] == want_functions
-    mutator_ok = isinstance(got_mutator, str) and got_mutator.strip() == want_mutator
+    mutator_ok = (
+        isinstance(got_mutator, str)
+        and cc.normalize_qualname(got_mutator) == cc.normalize_qualname(want_mutator)
+    )
 
     score = 0.5 * functions_ok + 0.5 * mutator_ok
     passed = functions_ok and mutator_ok

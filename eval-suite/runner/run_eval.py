@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -55,6 +56,46 @@ CONDITION_POLICY = {"cloud": "cloud-only", "routing": "static"}
 def die(message: str) -> None:
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def load_dotenv_into_environ(env_path: Path) -> list[str]:
+    """Load repo-root .env into this process's environment, mirroring
+    `set -a; . "$repo_dir/.env"; set +a` from run_fanout_policy_pair.sh.
+
+    Without this, ANTHROPIC_AUTH_TOKEN (the Lumid claude:proxy PAT) never
+    reaches the `claude` subprocess, and every job fails identically with
+    "Not logged in" regardless of task or condition - claude's own local
+    auth gate rejects the call before any network request is made.
+
+    Sources through real bash (not a hand-rolled parser) since .env may use
+    quoting or `export`. Only touches keys .env itself declares, and returns
+    just their names - never values - so nothing secret is ever logged.
+    """
+    if not env_path.is_file():
+        return []
+    declared_keys = []
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip().removeprefix("export ").strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        declared_keys.append(stripped.split("=", 1)[0].strip())
+    if not declared_keys:
+        return []
+
+    sourced = subprocess.run(
+        ["bash", "-c", f"set -a; . {shlex.quote(str(env_path))}; set +a; env"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    resolved = dict(line.split("=", 1) for line in sourced.splitlines() if "=" in line)
+
+    loaded = []
+    for key in declared_keys:
+        if key in resolved:
+            os.environ[key] = resolved[key]
+            loaded.append(key)
+    return loaded
 
 
 def free_port() -> int:
@@ -258,7 +299,16 @@ def run_claude(ctx: RunContext, job: Job, sandbox_dir: Path, port: int, stream_o
         stdout, returncode = proc.stdout, proc.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
-        stdout = exc.stdout or ""
+        # exc.stdout is bytes even though text=True was passed above: Python
+        # only decodes on the success path of subprocess.run, not on the
+        # TimeoutExpired path, so the partial output raised with the
+        # exception is still raw.
+        raw_stdout = exc.stdout or ""
+        stdout = (
+            raw_stdout.decode("utf-8", errors="replace")
+            if isinstance(raw_stdout, bytes)
+            else raw_stdout
+        )
     stream_out_path.write_text(stdout, encoding="utf-8")
     return stdout, returncode, timed_out, session_id
 
@@ -379,6 +429,13 @@ def run_job(ctx: RunContext, job: Job) -> JobResult:
         report_path.write_text(report_text, encoding="utf-8")
         trace_dest, graph_dest = collect_trace(ctx, trace_dir, stream_path)
         verdict = run_checker(ctx.python_bin, job.task, sandbox_dir, report_path, verdict_path)
+        if timed_out:
+            verdict = {
+                **verdict,
+                "passed": False,
+                "reason": f"claude timed out after {job.task.timeout_s + ctx.claude_timeout_extra_s}s "
+                f"(checker on partial output: {verdict.get('reason', '')})",
+            }
     except Exception as exc:  # noqa: BLE001 - one bad job must not sink the campaign
         error = f"{type(exc).__name__}: {exc}"
     finally:
@@ -552,6 +609,15 @@ def main(argv: list[str] | None = None) -> int:
     repo_dir = args.repo_dir.resolve()
     if not (repo_dir / "edgeproxy").is_dir():
         die(f"expected edgeproxy/ under {repo_dir}")
+
+    loaded_env_keys = load_dotenv_into_environ(repo_dir / ".env")
+    if loaded_env_keys:
+        print(f"==> loaded from .env: {', '.join(sorted(loaded_env_keys))}")
+    else:
+        print(
+            "==> warning: no .env found/loaded at "
+            f"{repo_dir / '.env'} - claude calls will fail auth if it needs ANTHROPIC_AUTH_TOKEN"
+        )
 
     conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
     for c in conditions:

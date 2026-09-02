@@ -1,0 +1,122 @@
+[
+  {
+    "slug": "swebench-qutebrowser-e64622cd",
+    "rank": 1,
+    "repo": "qutebrowser/qutebrowser",
+    "patch_len_chars": 2130,
+    "n_fail_to_pass": 4,
+    "n_pass_to_pass": 43
+  },
+  {
+    "slug": "swebench-openlibrary-c05ccf2c",
+    "rank": 2,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 2546,
+    "n_fail_to_pass": 1,
+    "n_pass_to_pass": 77
+  },
+  {
+    "slug": "swebench-ansible-cd473dfb",
+    "rank": 3,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 3022,
+    "n_fail_to_pass": 17,
+    "n_pass_to_pass": 30
+  },
+  {
+    "slug": "swebench-qutebrowser-8d05f028",
+    "rank": 4,
+    "repo": "qutebrowser/qutebrowser",
+    "patch_len_chars": 3588,
+    "n_fail_to_pass": 2,
+    "n_pass_to_pass": 161
+  },
+  {
+    "slug": "swebench-ansible-b5e02936",
+    "rank": 5,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 4055,
+    "n_fail_to_pass": 3,
+    "n_pass_to_pass": 4
+  },
+  {
+    "slug": "swebench-qutebrowser-5fdc83e5",
+    "rank": 6,
+    "repo": "qutebrowser/qutebrowser",
+    "patch_len_chars": 5035,
+    "n_fail_to_pass": 11,
+    "n_pass_to_pass": 46
+  },
+  {
+    "slug": "swebench-ansible-5e88cd99",
+    "rank": 7,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 5686,
+    "n_fail_to_pass": 3,
+    "n_pass_to_pass": 0
+  },
+  {
+    "slug": "swebench-openlibrary-53d376b1",
+    "rank": 8,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 6551,
+    "n_fail_to_pass": 4,
+    "n_pass_to_pass": 4
+  },
+  {
+    "slug": "swebench-ansible-39bd8b99",
+    "rank": 9,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 7585,
+    "n_fail_to_pass": 1,
+    "n_pass_to_pass": 0
+  },
+  {
+    "slug": "swebench-openlibrary-1be7de78",
+    "rank": 10,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 9170,
+    "n_fail_to_pass": 6,
+    "n_pass_to_pass": 0
+  },
+  {
+    "slug": "swebench-openlibrary-798a5825",
+    "rank": 11,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 11825,
+    "n_fail_to_pass": 2,
+    "n_pass_to_pass": 12
+  },
+  {
+    "slug": "swebench-ansible-d58e69c8",
+    "rank": 12,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 17082,
+    "n_fail_to_pass": 2,
+    "n_pass_to_pass": 38
+  },
+  {
+    "slug": "swebench-openlibrary-6fdbbeee",
+    "rank": 13,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 21933,
+    "n_fail_to_pass": 1,
+    "n_pass_to_pass": 6
+  },
+  {
+    "slug": "swebench-ansible-395e5e20",
+    "rank": 14,
+    "repo": "ansible/ansible",
+    "patch_len_chars": 36212,
+    "n_fail_to_pass": 8,
+    "n_pass_to_pass": 0
+  },
+  {
+    "slug": "swebench-openlibrary-5fb31263",
+    "rank": 15,
+    "repo": "internetarchive/openlibrary",
+    "patch_len_chars": 174888,
+    "n_fail_to_pass": 4,
+    "n_pass_to_pass": 7
+  }
+]

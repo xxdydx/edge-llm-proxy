@@ -20,7 +20,10 @@ def check(sandbox: Path, fixture: Path, report_text: str) -> dict:
     want_raiser = answer_key["unknown_key_raiser"]
 
     count_ok = got_count == want_count
-    raiser_ok = isinstance(got_raiser, str) and got_raiser.strip() == want_raiser
+    raiser_ok = (
+        isinstance(got_raiser, str)
+        and cc.normalize_qualname(got_raiser) == cc.normalize_qualname(want_raiser)
+    )
 
     score = 0.5 * count_ok + 0.5 * raiser_ok
     passed = count_ok and raiser_ok

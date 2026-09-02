@@ -299,7 +299,8 @@ if echo "$SSH_LINE" | grep -q 'ProxyCommand='; then
   SSH_TARGET="$(echo "$SSH_LINE" | grep -oE "[A-Za-z0-9_.-]+@${TASK_ID}\$")"
   [ -n "$SSH_TARGET" ] || die "couldn't parse ssh target from: $SSH_LINE"
   SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o LogLevel=ERROR -o "ProxyCommand=flowmesh ssh proxy $TASK_ID")
+            -o LogLevel=ERROR -o "ProxyCommand=flowmesh ssh proxy $TASK_ID" \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=180)
   log "ssh target: $SSH_TARGET (proxy)"
 else
   SSH_MODE=direct
@@ -309,8 +310,15 @@ else
   # `-o Port=` rather than a bare port flag: ssh spells it -p and scp spells it
   # -P (lowercase -p means "preserve mtimes" to scp, and takes no argument), so a
   # shared array can only work via the config-style option both accept.
+  # ServerAliveInterval/CountMax matter most here: ssh_run's bootstrap.sh call
+  # below stays open streaming output for 20-30+ minutes (model download +
+  # vLLM install), which is far more exposed to a brief network hiccup
+  # silently dropping the connection than any of this script's other short
+  # ssh calls. Without a keepalive, that reads identically to "killed" with
+  # no indication anything actually went wrong on the box.
   SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o LogLevel=ERROR -o "Port=$SSH_PORT")
+            -o LogLevel=ERROR -o "Port=$SSH_PORT" \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=180)
   log "ssh target: $SSH_TARGET:$SSH_PORT"
 fi
 
@@ -358,6 +366,7 @@ update_ssh_config() (
     UserKnownHostsFile /dev/null
     LogLevel ERROR
     ServerAliveInterval 30
+    ServerAliveCountMax 180
 $end
 EOF
   } >> "$tmp"

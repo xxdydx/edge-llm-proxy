@@ -1,0 +1,5 @@
+{
+  "total_public_functions": 21,
+  "can_edit_issue_caller": "api.change_status",
+  "modules_with_raise_statements": 3
+}

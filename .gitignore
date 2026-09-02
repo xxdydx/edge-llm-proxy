@@ -16,6 +16,7 @@ traces/
 # not run artifacts.
 eval-suite/results/*
 !eval-suite/results/.gitkeep
+eval-suite/swebench/results/
 
 # ---- python --------------------------------------------------------------
 __pycache__/

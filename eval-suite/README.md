@@ -36,7 +36,9 @@ flowmesh/traces/<suite-name>-run-<condition>-<run-stamp>-<task-id>-seed<seed>/
   # trace.graph.json, trace.mmd - one folder per job, outside eval-suite/
 ```
 
-## The 12 tasks
+## The tasks
+
+### Original 12 (small, single-fixture, mostly &lt;100 lines)
 
 | id | category | what it tests |
 | --- | --- | --- |
@@ -52,6 +54,32 @@ flowmesh/traces/<suite-name>-run-<condition>-<run-stamp>-<task-id>-seed<seed>/
 | `refactor-rename-for-clarity` | refactor | consistent rename across call sites |
 | `fanout-repo-audit` | fanout | forced 3-way concurrent subagents, report + answer key |
 | `fanout-parallel-bugfix` | fanout | forced 3-way concurrent subagents, non-overlapping edits |
+
+These are deliberately small and mechanical (median job wall time 57s across
+a 120-job campaign) - they validate that the harness, checkers, and both
+policies work correctly end-to-end, but they are too easy to reveal where
+local serving actually breaks down. `bigapp/` below exists to close that gap.
+
+### Hard tier: `bigapp/`, a ~370-line, 9-module issue-tracking service
+
+Both tasks below share the same fixture shape (`models.py`, `storage.py`,
+`validation.py`, `workflow.py`, `permissions.py`, `search.py`,
+`notifications.py`, `reporting.py`, `api.py`, plus one test file per
+module) - roughly 5x the line count of anything in the original 12, and
+still well inside the local backend's 100K-token budget, but large enough
+to require real cross-file reading instead of one-file comprehension.
+
+| id | category | what it tests |
+| --- | --- | --- |
+| `feature-priority-levels` | feature | a real feature (issue priority levels) requiring coordinated changes across 6 of the 9 modules, graded by a held-out 11-test file exercised through the public `api.py` interface |
+| `fanout-architecture-map` | fanout | exactly 3 concurrent subagents, each reading a 3-file slice of the whole codebase, consolidating into an architecture report whose facts (e.g. total function count, the one cross-module call site into `permissions.can_edit_issue`) require genuine synthesis across agents, not just concatenation |
+
+`feature-priority-levels` reuses the same `edit_task_check` pattern as the
+original edit/refactor tasks (protected test files, full pytest suite must
+pass) - the difference is scope, not mechanism: touching 1 file vs. 6.
+`fanout-architecture-map` reuses the fan-out report-marker/heading/answer-key
+pattern from `fanout-repo-audit`, scaled to a 9-file codebase split three
+ways instead of a 3-file codebase split three ways.
 
 Exploration and fanout tasks are read-only or delegate-only and end with a
 fenced JSON answer block (between `<!-- ANSWER_START -->` / `<!-- ANSWER_END
@@ -98,7 +126,10 @@ python3 eval-suite/runner/run_eval.py \
   future one without changing the rest of the naming; `--traces-root`
   overrides the destination if you don't want `<repo-dir>/traces`.
 - `--tasks explore-pricing-api,fix-null-handling` runs a subset; useful for a
-  quick smoke run before committing to the full 12 x 2 x 5 = 120-job matrix.
+  quick smoke run before committing to the full 14 x 2 x N job matrix (N x 5
+  = 140 jobs). The two hard-tier tasks have much longer timeouts (600s and
+  900s vs. 240-600s for the original 12) and take noticeably longer per job -
+  budget extra wall time when including them.
 
 Output: `results/<experiment-id>/summary.json` (every job plus per-cell
 pass rate, CI, mean score, mean wall time) and `summary.md` (the same as a
@@ -132,10 +163,12 @@ python3 eval-suite/tasks/fix-null-handling/checker.py \
   --out /tmp/verdict.json
 ```
 
-All 12 checkers were validated this way before this suite was used for a live
-campaign: each one fails against its untouched buggy/unrefactored fixture and
-passes against a hand-written correct solution (and, for exploration/fanout
-tasks, fails against a plausible wrong answer too).
+All 14 checkers were validated this way before being trusted: each one fails
+against its untouched buggy/unrefactored fixture and passes against a
+hand-written correct solution (and, for exploration/fanout tasks, fails
+against a plausible wrong answer too). `feature-priority-levels` was
+additionally validated against a full hand-written gold implementation of
+the feature spec (all 39 tests), not just a partial patch.
 
 ## Adding a task
 
@@ -154,16 +187,25 @@ tasks, fails against a plausible wrong answer too).
 5. Validate offline the same way as step "Validating a checker" above before
    trusting it in a live campaign.
 
-## What this does and doesn't answer yet
+## What this does and doesn't answer
 
-Built: the task suite, checkers, and parallel runner. **Not yet run**: no
-live campaign has been executed - that needs the GPU box (vLLM) and cloud
-credentials together, which this development machine doesn't have. Running
-`--tasks all --conditions cloud,routing --seeds 5` there is what turns this
-into the actual first paired campaign and the rate/interval evidence the
-project currently lacks.
+The first full paired campaign ran on `qwen38-27b` (RTX 6000 Ada) on
+2026-09-01, experiment `eval-suite-20260901T104145Z`: all 12 original tasks x
+2 conditions x 5 seeds = 120 jobs, **119/120 passed (99.2%)**. The one gap
+(`explore-call-graph`/cloud, 4/5) is a genuine model error (wrong function
+name), not a checker bug - see `results/eval-suite-20260901T104145Z/`.
+Within the routing condition, 402/462 calls (87.0%) were actually served
+locally; the rest went cloud, concentrated in a specific per-session call
+type rather than spread evenly - worth characterizing further.
 
-The confidence-interval calculation in `runner/stats.py` is intentionally
-left for a human to fill in (see the `TODO(human)` there) - which interval
-method to use at n=3-5 is a real methodological choice for this project, not
-a routine implementation detail.
+That result is real but limited: every original-12 fixture is 30-82 lines,
+median job wall time was 57s, and 87% local placement mostly reflects that
+these small fixtures trivially satisfy the static policy's feasibility
+gates rather than the router making an interesting choice. It doesn't show
+whether local holds up on large-context, multi-file, or long-horizon work -
+the two hard-tier tasks (`feature-priority-levels`,
+`fanout-architecture-map`) exist to test exactly that gap and have not yet
+been run as part of a full campaign.
+
+The confidence-interval calculation in `runner/stats.py` (Wilson score
+interval) is implemented and live-validated on the 120-job campaign above.

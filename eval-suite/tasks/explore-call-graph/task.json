@@ -7,6 +7,6 @@
   "checker": "checker.py",
   "expects_report": true,
   "fanout_required": false,
-  "timeout_s": 240,
+  "timeout_s": 360,
   "tags": ["read-only", "call-graph", "comprehension"]
 }

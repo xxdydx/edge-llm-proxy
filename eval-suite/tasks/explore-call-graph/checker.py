@@ -19,7 +19,9 @@ def check(sandbox: Path, fixture: Path, report_text: str) -> dict:
     want_callers = answer_key["callers"]
     want_count = answer_key["call_site_count"]
 
-    callers_ok = isinstance(got_callers, list) and [str(x) for x in got_callers] == want_callers
+    callers_ok = isinstance(got_callers, list) and [
+        cc.normalize_qualname(str(x)) for x in got_callers
+    ] == [cc.normalize_qualname(w) for w in want_callers]
     count_ok = got_count == want_count
 
     score = 0.5 * callers_ok + 0.5 * count_ok

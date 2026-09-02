@@ -1,0 +1,12 @@
+{
+  "id": "feature-priority-levels",
+  "category": "feature",
+  "summary": "Hard tier: implement a new feature (issue priority levels) that requires coordinated changes across 6 of 9 modules in a ~370-line codebase.",
+  "fixture_dir": "fixture",
+  "prompt_file": "prompt.md",
+  "checker": "checker.py",
+  "expects_report": false,
+  "fanout_required": false,
+  "timeout_s": 600,
+  "tags": ["hard", "feature", "multi-file", "unit-test", "large-context"]
+}

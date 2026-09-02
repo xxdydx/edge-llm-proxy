@@ -6,8 +6,9 @@ Launch exactly three subagents concurrently, one per subdirectory: (1)
 calls: emit the three independent Agent calls together so they run in
 parallel, do not set `run_in_background`, and do not return while any agent
 is pending. Each subagent should report, for its one subdirectory only: the
-public (non-underscore) top-level function names defined there, and whether
-a test file is present in that subdirectory.
+public (non-underscore) top-level function names defined in that
+subdirectory's non-test source file (i.e. not in any `test_*.py` file), and
+whether a `test_*.py` file is present in that subdirectory.
 
 After every subagent result has arrived, return one consolidated Markdown
 report. Start the report with this exact line:
