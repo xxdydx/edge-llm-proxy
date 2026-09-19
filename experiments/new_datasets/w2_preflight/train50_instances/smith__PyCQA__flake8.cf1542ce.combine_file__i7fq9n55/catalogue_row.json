@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/flake8/api/legacy.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 9,
+  "image_name": "swebench/swesmith.x86_64.pycqa_1776_flake8.cf1542ce",
+  "instance_id": "PyCQA__flake8.cf1542ce.combine_file__i7fq9n55",
+  "mutation_locations": [
+    "src/flake8/api/legacy.py|class StyleGuide:"
+  ],
+  "pass_to_pass_count": 410,
+  "patch_sha256": "473c8d3a671131f7ed700e4eff3c958c021f9c875080c435a74e405989221701",
+  "problem_sha256": "306e645cd064b2f1faa017efeacedbe63871969fb73bf0b161d3b85fa8cb73ba",
+  "problem_statement": "# Flake8 StyleGuide initialization causes AttributeError\n\n## Current problem\n\nWhen using the legacy API to create a StyleGuide, it fails with an AttributeError. The StyleGuide initialization is broken and causes errors when trying to check files.\n\n```python\nfrom flake8.api import legacy\n\n# Create a style guide\nstyle_guide = legacy.get_style_guide()\n\n# Try to check a file - this fails\nreport = style_guide.check_files(['my_file.py'])\n```\n\nThis results in:\n\n```\nAttributeError: 'NoneType' object has no attribute 'file_checker_manager'\n```\n\n## Reproduction\n\nHere's a simple script that reproduces the issue:\n\n```python\nfrom flake8.api import legacy\n\ndef main():\n    style_guide = legacy.get_style_guide()\n    # This line will fail\n    report = style_guide.check_files(['some_file.py'])\n    print(f\"Found {report.total_errors} errors\")\n\nif __name__ == \"__main__\":\n    main()\n```\n\n## Additional context\n\nThis breaks any tools or CI pipelines that use the legacy API to run Flake8 programmatically. The StyleGuide initialization appears to be setting the application to None and then trying to access attributes on it.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00001-of-00011.parquet",
+    "parquet_sha256": "f15e5b8ab49866e93245a736056fab680d6dde8fb5c2ba89c06241cf12a32afe",
+    "row_index_in_file": 594
+  },
+  "source_repo": "swesmith/PyCQA__flake8.cf1542ce",
+  "source_split": "train",
+  "task_uid": "smith:PyCQA__flake8.cf1542ce.combine_file__i7fq9n55",
+  "upstream_repo": "pycqa/flake8",
+  "version": null
+}

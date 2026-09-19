@@ -2,9 +2,10 @@
 """Measure vLLM TTFT as a function of total and cached-prefix tokens.
 
 For every sample this benchmark resets the prefix cache, sends a warmer prompt,
-then sends a target prompt sharing exactly the requested token prefix.  It
-measures the target's first-token latency and verifies the actual cache state
-using vLLM's prefix-cache counter deltas.
+then sends a target prompt constructed with exactly the requested token prefix
+before the native Messages endpoint decodes and re-tokenizes it.  It measures
+the target's first-token latency and verifies the actual cache state using
+vLLM's prefix-cache counter deltas.
 """
 
 from __future__ import annotations
@@ -117,30 +118,42 @@ def reset_cache(client: httpx.Client) -> None:
     response.raise_for_status()
 
 
-def completion_body(model: str, prompt: list[int], stream: bool) -> dict[str, Any]:
+def message_body(
+    model: str, prompt: list[int], stream: bool, tokenizer: Any
+) -> dict[str, Any]:
+    # The native Messages endpoint must receive text and applies the model's
+    # chat template before inference. decode() followed by vLLM's re-tokenization
+    # can change exact token boundaries/counts, especially where the shared
+    # prefix meets a tail. That is the production behavior this benchmark needs
+    # to measure: cache counters below report reuse for the actual post-template
+    # tokens, and the existing valid_hit check exposes material drift instead of
+    # silently treating the client-side token IDs as ground truth.
+    decoded_text = tokenizer.decode(prompt)
     return {
         "model": model,
-        "prompt": prompt,
         "max_tokens": 1,
         "temperature": 0,
-        "ignore_eos": True,
         "stream": stream,
-        "return_token_ids": True,
+        "messages": [{"role": "user", "content": decoded_text}],
     }
 
 
-def warm(client: httpx.Client, model: str, prompt: list[int]) -> None:
-    response = client.post("/v1/completions", json=completion_body(model, prompt, False))
+def warm(client: httpx.Client, model: str, prompt: list[int], tokenizer: Any) -> None:
+    response = client.post(
+        "/v1/messages", json=message_body(model, prompt, False, tokenizer)
+    )
     response.raise_for_status()
 
 
-def measure_ttft(client: httpx.Client, model: str, prompt: list[int]) -> tuple[float, float]:
+def measure_ttft(
+    client: httpx.Client, model: str, prompt: list[int], tokenizer: Any
+) -> tuple[float, float]:
     started = time.perf_counter()
     headers_ms: float | None = None
     ttft_ms: float | None = None
 
     with client.stream(
-        "POST", "/v1/completions", json=completion_body(model, prompt, True)
+        "POST", "/v1/messages", json=message_body(model, prompt, True, tokenizer)
     ) as response:
         headers_ms = (time.perf_counter() - started) * 1000
         response.raise_for_status()
@@ -151,23 +164,34 @@ def measure_ttft(client: httpx.Client, model: str, prompt: list[int]) -> tuple[f
             if data == "[DONE]":
                 continue
             payload = json.loads(data)
-            for choice in payload.get("choices") or []:
-                if choice.get("text") or choice.get("token_ids"):
-                    if ttft_ms is None:
-                        ttft_ms = (time.perf_counter() - started) * 1000
+            # Match edgeproxy.server.relay(): real Anthropic-style streams mark
+            # generated output with content_block_delta events (text_delta for
+            # this one-token, tool-free request shape).
+            if payload.get("type") == "content_block_delta" and ttft_ms is None:
+                ttft_ms = (time.perf_counter() - started) * 1000
 
     if headers_ms is None or ttft_ms is None:
         raise RuntimeError("stream ended without a generated token")
     return ttft_ms, headers_ms
 
 
-def token_sequences(tokenizer_name: str, length: int, seed: int) -> tuple[list[int], ...]:
+def load_tokenizer(tokenizer_name: str) -> Any:
     try:
         from transformers import AutoTokenizer
     except ImportError as exc:
         raise RuntimeError("transformers is required to construct valid token IDs") from exc
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    return AutoTokenizer.from_pretrained(tokenizer_name)
+
+
+def token_sequences(
+    tokenizer_name: str,
+    length: int,
+    seed: int,
+    *,
+    tokenizer: Any | None = None,
+) -> tuple[list[int], ...]:
+    tokenizer = tokenizer or load_tokenizer(tokenizer_name)
     special = set(tokenizer.all_special_ids)
     pool = [token_id for token_id in range(len(tokenizer)) if token_id not in special]
     if len(pool) < 3:
@@ -306,8 +330,9 @@ def main() -> int:
             )
 
         max_length = max(args.lengths)
+        tokenizer = load_tokenizer(args.tokenizer)
         shared, warm_tail, target_tail, unrelated = token_sequences(
-            args.tokenizer, max_length, args.seed
+            args.tokenizer, max_length, args.seed, tokenizer=tokenizer
         )
         version = server_version(client)
 
@@ -318,7 +343,7 @@ def main() -> int:
 
         # Settle imports, kernels, and the HTTP connection with unrelated data,
         # then clear the prefix cache before the actual randomized sweep.
-        warm(client, args.model, unrelated[: min(512, max_length)])
+        warm(client, args.model, unrelated[: min(512, max_length)], tokenizer)
         reset_cache(client)
 
         conditions = [
@@ -363,9 +388,11 @@ def main() -> int:
                     warm_prompt = unrelated[:total]
 
                 reset_cache(client)
-                warm(client, args.model, warm_prompt)
+                warm(client, args.model, warm_prompt, tokenizer)
                 queries_before, hits_before, _ = cache_counters(client)
-                ttft_ms, headers_ms = measure_ttft(client, args.model, target_prompt)
+                ttft_ms, headers_ms = measure_ttft(
+                    client, args.model, target_prompt, tokenizer
+                )
                 queries_after, hits_after, _ = cache_counters(client)
 
                 actual_queries = round(queries_after - queries_before)

@@ -1,0 +1,160 @@
+{
+  "warning": "SYNTHETIC SCHEMA FIXTURES ONLY. No outcomes, timings, hashes or artifact references below are measured.",
+  "A_prefix_outcome": {
+    "is_synthetic_fixture": true,
+    "schema_version": 1,
+    "protocol_version": "fixture-v1",
+    "prefix_id": "fixture-task1:edge-run1:call5",
+    "task_id": "fixture-task1",
+    "trajectory_id": "fixture-task1:edge-run1",
+    "split": "train",
+    "source_policy": "edge-only-v1",
+    "backend_fingerprint_id": "fixture-edge-fingerprint",
+    "call_index": 5,
+    "predecision_request_ref": "fixtures/requests/task1-call5.json",
+    "history_integrity": "complete",
+    "predecision_features": {
+      "calls_completed": 4,
+      "recent_failed_test_runs": 1,
+      "recent_test_execution_errors": 0
+    },
+    "features_version": "fixture-features-v1",
+    "remaining_budget_at_prefix": {
+      "main_calls_including_current": 36,
+      "active_seconds": 1000
+    },
+    "core_sample_selected": true,
+    "selection_probability": 0.25,
+    "terminal_grade_ref": "fixtures/grades/edge-run1.json",
+    "resolved": false,
+    "label_valid": true,
+    "termination_reason": "normal_completion",
+    "outcome_censored": false
+  },
+  "B_branch_outcome": {
+    "is_synthetic_fixture": true,
+    "schema_version": 1,
+    "protocol_version": "fixture-v1",
+    "branch_pair_id": "fixture-branch-pair1",
+    "prefix_id": "fixture-task1:edge-run1:call5",
+    "checkpoint_id": "fixture-checkpoint1",
+    "checkpoint_certificate_ref": "fixtures/checkpoints/certificate1.json",
+    "source_trajectory_id": "fixture-task1:edge-run1",
+    "source_policy": "edge-only-v1",
+    "split": "train",
+    "sampling_probability": 0.05,
+    "intervention": "next_main_call_only",
+    "continuation_policy": "edge-only-v1",
+    "remaining_budget": {
+      "main_calls_including_current": 36,
+      "active_seconds": 1000
+    },
+    "candidate_generation_protocol": "fresh_one_per_backend",
+    "repeat_index": 0,
+    "edge_branch": {
+      "branch_id": "fixture-pair1-edge",
+      "initial_backend_fingerprint_id": "fixture-edge-fingerprint",
+      "initial_invocation_id": "fixture-inv-edge",
+      "initial_candidate_ref": "fixtures/responses/edge-next.json",
+      "continuation_trajectory_ref": "fixtures/trajectories/edge-branch.jsonl",
+      "grader_ref": "fixtures/grades/edge-branch.json",
+      "resolved": false,
+      "label_valid": true,
+      "termination_reason": "normal_completion",
+      "remaining_total_cost_usd": null,
+      "remaining_active_seconds": 180,
+      "cost_integrity": "unknown"
+    },
+    "cloud_branch": {
+      "branch_id": "fixture-pair1-cloud",
+      "initial_backend_fingerprint_id": "fixture-cloud-fingerprint",
+      "initial_invocation_id": "fixture-inv-cloud",
+      "initial_candidate_ref": "fixtures/responses/cloud-next.json",
+      "continuation_trajectory_ref": "fixtures/trajectories/cloud-branch.jsonl",
+      "grader_ref": "fixtures/grades/cloud-branch.json",
+      "resolved": true,
+      "label_valid": true,
+      "termination_reason": "normal_completion",
+      "remaining_total_cost_usd": null,
+      "remaining_active_seconds": 160,
+      "cost_integrity": "unknown"
+    },
+    "pair_valid": true,
+    "observed_pair_class": "CLOUD_ONLY_PASS",
+    "diagnostic_flags": [
+      "synthetic_example_not_evidence"
+    ]
+  },
+  "C_serving_call": {
+    "is_synthetic_fixture": true,
+    "schema_version": 1,
+    "protocol_version": "fixture-v1",
+    "invocation_id": "fixture-inv-cloud",
+    "logical_call_id": "fixture-pair1-cloud:call5",
+    "task_id": "fixture-task1",
+    "trajectory_id": "fixture-pair1-cloud",
+    "prefix_id": "fixture-task1:edge-run1:call5",
+    "branch_id": "fixture-pair1-cloud",
+    "purpose": "branch_initial",
+    "backend_fingerprint_id": "fixture-cloud-fingerprint",
+    "attempt_index": 0,
+    "pre_dispatch_snapshot": {
+      "cloud_queue_depth": null,
+      "cloud_cache_state": "unknown",
+      "snapshot_age_ms": 10,
+      "input_tokens_estimate": 20000,
+      "input_tokens_source": "declared_tokenizer_estimate"
+    },
+    "measured_timings": {
+      "client_first_byte_ms": 300,
+      "client_first_content_ms": 450,
+      "client_total_ms": 2000,
+      "server_queue_ms": null,
+      "true_decode_tpot_ms": null
+    },
+    "raw_usage": {
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    "normalised_usage": {
+      "input_tokens_exact": null,
+      "output_tokens_exact": null
+    },
+    "usage_integrity": "partial",
+    "status": "completed",
+    "response_ref": "fixtures/responses/cloud-next.json",
+    "observed_cost_usd": null,
+    "estimated_cost_usd": null,
+    "cost_basis": "unavailable",
+    "latency_censored": false,
+    "measurement_quality_flags": [
+      "no_server_timing",
+      "provider_usage_incomplete"
+    ]
+  },
+  "preference_side_table": {
+    "is_synthetic_fixture": true,
+    "schema_version": 1,
+    "preference_pair_id": "fixture-pref1",
+    "prefix_id": "fixture-task1:edge-run1:call5",
+    "sample_type": "branch_audit",
+    "branch_pair_id": "fixture-branch-pair1",
+    "edge_candidate_invocation_id": "fixture-inv-edge",
+    "cloud_candidate_invocation_id": "fixture-inv-cloud",
+    "primary": {
+      "candidate_A_backend": "edge",
+      "candidate_B_backend": "cloud",
+      "verdict": "B_BETTER",
+      "parse_status": "valid"
+    },
+    "reversed": {
+      "candidate_A_backend": "cloud",
+      "candidate_B_backend": "edge",
+      "verdict": "A_BETTER",
+      "parse_status": "valid"
+    },
+    "aggregate_verdict": "CLOUD_PREFERRED",
+    "label_kind": "response_preference_not_task_harm",
+    "two_pass_complete": true
+  }
+}

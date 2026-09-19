@@ -1,0 +1,15 @@
+diff --git a/moto/dynamodb/parsing/key_condition_expression.py b/moto/dynamodb/parsing/key_condition_expression.py
+index 3e8a9c10c..5f3e4c2cd 100644
+--- a/moto/dynamodb/parsing/key_condition_expression.py
++++ b/moto/dynamodb/parsing/key_condition_expression.py
+@@ -161,6 +161,10 @@ def parse_expression(
+             # hashkey = :id and begins_with(      sortkey,     :sk)
+             #                              ^ --> ^
+             if current_stage in [EXPRESSION_STAGES.INITIAL_STAGE]:
++                if current_phrase == "":
++                    # (hash_key = :id) AND (sortkey = :sk)
++                    # ^
++                    continue
+                 if current_phrase != "begins_with":
+                     raise MockValidationException(
+                         f"Invalid KeyConditionExpression: Invalid function name; function: {current_phrase}"

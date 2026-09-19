@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "parso/tree.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 205,
+  "image_name": "swebench/swesmith.x86_64.davidhalter_1776_parso.338a5760",
+  "instance_id": "davidhalter__parso.338a5760.func_basic__v387dcl7",
+  "mutation_locations": [
+    "parso/tree.py|class Leaf(NodeOrLeaf):"
+  ],
+  "pass_to_pass_count": 595,
+  "patch_sha256": "f3590bed3424ae61d73e1ad5c4c924fc996aadb820ec836d3af06b306e849074",
+  "problem_sha256": "b09b243f0c8f744451bfca81ac9e6447720fc1092cffae9b051cd32fc5f20181",
+  "problem_statement": "Leaf start_pos setter swaps line and column coordinates\n\n#### Description\n\nWhen setting the `start_pos` property on a `Leaf` node, the line and column values get swapped. This causes incorrect position reporting throughout the parser.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom parso.tree import Leaf\n\n# Create a leaf node\nleaf = Leaf('NAME', 'test')\n\n# Set start position - should be (line=1, column=5)\nleaf.start_pos = (1, 5)\n\n# Check the values\nprint(f\"Expected: line=1, column=5\")\nprint(f\"Actual: line={leaf.line}, column={leaf.column}\")\n```\n\nExpected output:\n```\nExpected: line=1, column=5\nActual: line=1, column=5\n```\n\nActual output:\n```\nExpected: line=1, column=5\nActual: line=5, column=1\n```\n\nThe line and column values are swapped when using the `start_pos` setter. This affects error reporting and position tracking in parsed code.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00006-of-00011.parquet",
+    "parquet_sha256": "8e55de0daa541c031779f17d6ef04ebc3a4e2caad708d3137edb4587d89e60f3",
+    "row_index_in_file": 3064
+  },
+  "source_repo": "swesmith/davidhalter__parso.338a5760",
+  "source_split": "train",
+  "task_uid": "smith:davidhalter__parso.338a5760.func_basic__v387dcl7",
+  "upstream_repo": "davidhalter/parso",
+  "version": null
+}

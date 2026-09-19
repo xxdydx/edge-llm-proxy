@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "parse.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 8,
+  "image_name": "swebench/swesmith.x86_64.r1chardj0n3s_1776_parse.30da9e4f",
+  "instance_id": "r1chardj0n3s__parse.30da9e4f.lm_rewrite__0o73tmpp",
+  "mutation_locations": [
+    "parse.py|AM_PAT = r\"(\\s+[AP]M)\""
+  ],
+  "pass_to_pass_count": 90,
+  "patch_sha256": "36ff40122530a0975e627d9f3a892a0e6fd0f4afb6a8f5492a0feb147d55d297",
+  "problem_sha256": "0e2e26dafb0d11355929b2730e70e75e98f7d6e9142cbf8f5dc3b4b56ccfcc36",
+  "problem_statement": "Date parsing fails with certain datetime formats\n\nDescription\n\nIt seems there's an issue with parsing specific datetime formats after the recent changes. When attempting to parse dates with certain patterns, the function returns unexpected results or raises errors. This is particularly noticeable with formats that include time zones or AM/PM indicators.\n\nFor example, when parsing a string like 'Meet at 1/2/2011 12:45 PM', the expected datetime object should be `datetime(2011, 2, 1, 12, 45)`. However, the function does not return the correct datetime object, leading to a mismatch.\n\nSimilarly, parsing a string with a date and time like 'on 2012-09-17' should yield `datetime(2012, 9, 17, 0, 0, 0)`, but the function fails to produce the expected result.\n\nSteps to reproduce:\n\n1. Use the `parse` function to parse the string 'Meet at 1/2/2011 12:45 PM'.\n2. Check the returned datetime object.\n3. Compare it with the expected result `datetime(2011, 2, 1, 12, 45)`.\n\nThe issue might be related to how the function handles the conversion of date and time components, especially when dealing with time zones and AM/PM formats. Further investigation is needed to pinpoint the exact cause.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 3892
+  },
+  "source_repo": "swesmith/r1chardj0n3s__parse.30da9e4f",
+  "source_split": "train",
+  "task_uid": "smith:r1chardj0n3s__parse.30da9e4f.lm_rewrite__0o73tmpp",
+  "upstream_repo": "r1chardj0n3s/parse",
+  "version": null
+}

@@ -1,0 +1,12 @@
+{
+  "task_uid": "smith:davidhalter__parso.338a5760.func_basic__v387dcl7",
+  "instance_id": "davidhalter__parso.338a5760.func_basic__v387dcl7",
+  "status": "fail",
+  "rejection_reason": "unsupported_architecture",
+  "source_key": "smith",
+  "source_image_reference": "swebench/swesmith.x86_64.davidhalter_1776_parso.338a5760",
+  "required_platform": "linux/amd64 (image reference is x86_64) ",
+  "host_platform": "linux/arm64/v8",
+  "harness": "SWE-Gym/SWE-Bench-Fork vendored official adapter",
+  "evidence": "The vendored harness has no SWE-smith adapter/semantics; the pinned Smith row supplies an x86_64 image reference and no base_commit/version. Native-arm64 execution was not emulated or substituted."
+}

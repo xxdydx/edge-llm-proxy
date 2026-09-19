@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "addict/addict.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 8,
+  "image_name": "swebench/swesmith.x86_64.mewwts_1776_addict.75284f95",
+  "instance_id": "mewwts__addict.75284f95.func_basic__06sj084c",
+  "mutation_locations": [
+    "addict/addict.py|class Dict(dict):"
+  ],
+  "pass_to_pass_count": 120,
+  "patch_sha256": "bb5e103888c6e5df8f5ed009ed016563c38e66a2fbde0f0f1f074b402c9b7b58",
+  "problem_sha256": "7ffe86530d6f6d5fb385f2394789746ad8564ad3bbc4c6cd96f6e9c8f305451c",
+  "problem_statement": "freeze() method inverts behavior when called with explicit parameter\n\n#### Description\n\nThe `freeze()` method behaves incorrectly when called with an explicit boolean parameter. When `freeze(True)` is called, the dict becomes unfrozen instead of frozen, and when `freeze(False)` is called, it becomes frozen instead of unfrozen.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom addict import Dict\n\n# Create a Dict and try to freeze it\nd = Dict()\nd.a = 1\n\n# This should freeze the dict but actually unfreezes it\nd.freeze(True)\nd.b = 2  # This should raise an error but doesn't\n\nprint(\"Dict after freeze(True):\", d)  # Shows both a and b\n\n# Create another Dict and try the opposite\nd2 = Dict()\nd2.x = 10\n\n# This should unfreeze the dict but actually freezes it  \nd2.freeze(False)\ntry:\n    d2.y = 20  # This should work but raises an error\nexcept AttributeError as e:\n    print(\"Error when trying to add after freeze(False):\", e)\n```\n\nThe expected behavior is that `freeze(True)` should prevent modifications and `freeze(False)` should allow them, but the actual behavior is inverted.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 511
+  },
+  "source_repo": "swesmith/mewwts__addict.75284f95",
+  "source_split": "train",
+  "task_uid": "smith:mewwts__addict.75284f95.func_basic__06sj084c",
+  "upstream_repo": "mewwts/addict",
+  "version": null
+}

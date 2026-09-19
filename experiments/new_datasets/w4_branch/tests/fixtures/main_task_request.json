@@ -1,0 +1,16 @@
+{
+  "model": "deepseek-v4-flash",
+  "max_tokens": 32000,
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.277.853; cc_entrypoint=sdk-cli;"},
+    {"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."},
+    {"type": "text", "text": "You are an interactive agent that helps users with software engineering tasks."}
+  ],
+  "tools": [{"name": "Bash"}, {"name": "Read"}, {"name": "Edit"}],
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Your working directory is /testbed, a checkout of the getmoto/moto repository. Fix the following issue:\n\ndescribe_parameters depends on filter order, but shouldn't"}]},
+    {"role": "system", "content": "# Environment\nYou have been invoked in the following environment:\n - Primary working directory: /testbed"}
+  ],
+  "metadata": {"user_id": "{\"device_id\":\"fixture\",\"account_uuid\":\"\",\"session_id\":\"fixture-session-0001\"}"}
+}

@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "funcy/funcs.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.suor_1776_funcy.207a7810",
+  "instance_id": "Suor__funcy.207a7810.func_basic__ae9ykga1",
+  "mutation_locations": [
+    "funcy/funcs.py|def rcurry(func, n=EMPTY):"
+  ],
+  "pass_to_pass_count": 202,
+  "patch_sha256": "aa71917f85757b96f6e2f3ff413636acb8aef19cd47251f576c0931114af889c",
+  "problem_sha256": "60cd61af1e5067ec98818c18123edd25f839e8e55e93e65bb5f805354f386488",
+  "problem_statement": "rcurry function broken after recent changes\n\n#### Description\n\nThe `rcurry` function is not working correctly. When trying to use it with basic functions, it raises an AttributeError.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom funcy import rcurry\n\n# Simple subtraction example\nresult = rcurry(lambda x, y: x - y, 2)(10)(1)\nprint(result)  # Should print -9\n\n# String concatenation example  \nresult = rcurry(lambda x, y, z: x + y + z)('a')('b')('c')\nprint(result)  # Should print 'cba'\n\n# Method example\nresult = rcurry(str.endswith, 2)('c')('abc')\nprint(result)  # Should print True\n```\n\n#### Expected Output\n```\n-9\ncba\nTrue\n```\n\n#### Actual Output\n```\nAttributeError: 'Spec' object has no attribute 'min_n'\n```\n\nThe function seems to be trying to access a `min_n` attribute that doesn't exist on the Spec object, causing it to fail completely.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00000-of-00011.parquet",
+    "parquet_sha256": "302a383bb9229c42063ff2364b2ea637e9e7a20d82e0d566614d3aba9234833d",
+    "row_index_in_file": 3038
+  },
+  "source_repo": "swesmith/Suor__funcy.207a7810",
+  "source_split": "train",
+  "task_uid": "smith:Suor__funcy.207a7810.func_basic__ae9ykga1",
+  "upstream_repo": "suor/funcy",
+  "version": null
+}

@@ -44,7 +44,12 @@ def _token_count(value: Any) -> int | None:
     return count if count >= 0 else None
 
 
-def build_token_accounting(usage: Any) -> dict[str, int | bool | None]:
+def build_token_accounting(
+    usage: Any,
+    *,
+    observed_input_tokens: Any = None,
+    observed_input_source: str | None = None,
+) -> dict[str, int | bool | str | None]:
     """Build one provider-neutral token summary for every trace record.
 
     Anthropic-compatible detailed usage partitions total input into uncached,
@@ -54,6 +59,7 @@ def build_token_accounting(usage: Any) -> dict[str, int | bool | None]:
     usage = usage if isinstance(usage, dict) else {}
     raw_input = _token_count(usage.get("input_tokens"))
     output = _token_count(usage.get("output_tokens"))
+    observed_input = _token_count(observed_input_tokens)
     cache_details_available = (
         "cache_read_input_tokens" in usage
         or "cache_creation_input_tokens" in usage
@@ -79,8 +85,25 @@ def build_token_accounting(usage: Any) -> dict[str, int | bool | None]:
         if total_input is not None and output is not None
         else None
     )
+    # Some Anthropic-compatible gateways return input_tokens=0 for non-empty
+    # prompts when they do not expose prompt accounting. Preserve that raw
+    # provider value, but also publish a reportable proxy-observed count from
+    # the exact local prompt render. This keeps benchmark tables populated
+    # without mislabelling the fallback as provider-exact.
+    provider_input_is_reportable = total_input is not None and total_input > 0
+    reportable_input = total_input if provider_input_is_reportable else observed_input
+    reportable_source = (
+        "provider_usage"
+        if provider_input_is_reportable
+        else observed_input_source if observed_input is not None else None
+    )
     return {
         "input_tokens": total_input,
+        "provider_input_tokens": total_input,
+        "proxy_observed_input_tokens": observed_input,
+        "reportable_input_tokens": reportable_input,
+        "reportable_input_tokens_source": reportable_source,
+        "reportable_input_tokens_exact": provider_input_is_reportable,
         "output_tokens": output,
         "tokens_processed": tokens_processed,
         "cache_read_input_tokens": cache_read,
@@ -295,6 +318,13 @@ def build_structured_call(
         "tokens": {
             "input_tokens": total_input,
             "prompt_tokens_exact": prompt_tokens_exact,
+            "reportable_input_tokens": accounting.get("reportable_input_tokens"),
+            "reportable_input_tokens_source": accounting.get(
+                "reportable_input_tokens_source"
+            ),
+            "reportable_input_tokens_exact": accounting.get(
+                "reportable_input_tokens_exact", False
+            ),
             "output_tokens": accounting.get("output_tokens"),
             "cache_read_tokens": accounting.get("cache_read_input_tokens"),
             "cache_write_tokens": accounting.get("cache_creation_input_tokens"),

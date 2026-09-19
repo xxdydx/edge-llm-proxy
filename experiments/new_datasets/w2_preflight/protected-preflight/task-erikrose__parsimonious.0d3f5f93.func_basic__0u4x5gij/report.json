@@ -1,0 +1,12 @@
+{
+  "task_uid": "smith:erikrose__parsimonious.0d3f5f93.func_basic__0u4x5gij",
+  "instance_id": "erikrose__parsimonious.0d3f5f93.func_basic__0u4x5gij",
+  "status": "fail",
+  "rejection_reason": "unsupported_architecture",
+  "source_key": "smith",
+  "source_image_reference": "swebench/swesmith.x86_64.erikrose_1776_parsimonious.0d3f5f93",
+  "required_platform": "linux/amd64 (image reference is x86_64) ",
+  "host_platform": "linux/arm64/v8",
+  "harness": "SWE-Gym/SWE-Bench-Fork vendored official adapter",
+  "evidence": "The vendored harness has no SWE-smith adapter/semantics; the pinned Smith row supplies an x86_64 image reference and no base_commit/version. Native-arm64 execution was not emulated or substituted."
+}

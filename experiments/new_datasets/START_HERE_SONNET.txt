@@ -1,0 +1,13 @@
+Use the attached/extracted claude_code_collection_v2 packet as the updated assignment.
+
+Read SONNET_MASTER_PROMPT.md in full, then TASK_HARVEST_SPEC.md and TASK_SOURCE_LOCK.json. These supersede the previous open-ended dataset/task selection. Preserve the other collection, grading, checkpoint, cost-control and safety requirements.
+
+You are the leader; use the configured Luna workers for implementation. Qwen 27B and the configured DeepSeek Flash endpoint remain the experimental repair backends. Do not use engineering models to solve experimental tasks. Collect and label A/B/C plus the preference side table only; do not train any router.
+
+Task selection is already specified. Do not choose different datasets, repositories, sample counts or convenient task IDs. Run the supplied harvest_task_manifest.py to generate the actual literal task lists from the pinned public releases; do not ask an LLM to select them. Use SWE-Gym for the 300+60 real-task slots and SWE-smith-py for the 200+40 synthetic slots with the exact repository quotas. The two initial task IDs are getmoto__moto-5752 and getmoto__moto-6178. Lite is a membership/priority subset, not extra independent data. Reserve the 100 final-evaluation IDs without executing them.
+
+First audit the existing project and build the prior-exposure exclusion inventory. Run the included synthetic tests, fetch pinned source metadata, create the full task-ID manifests and verify actual eligible supply. Then implement/run genuine environment preflight and freeze the two-task stage. Only after that run the bounded smoke collection. Expand through the declared frozen stages, retaining completed jobs and following the existing approval/resource limits.
+
+The packet's preparation-time tests are not evidence of actual source-download or runtime success. If a quota is infeasible, return the exact source/repository/count/rejection evidence. Never invent IDs, loosen filters, substitute after seeing model outcomes or report approximate state replay as a verified execution branch.
+
+Begin with the audit, source-manifest tests and W2 assignment. Do not stop at another high-level plan.

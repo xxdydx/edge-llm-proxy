@@ -8,8 +8,8 @@ row per condition. Cache state is checked from vLLM prefix-cache counter deltas.
 retains the original name for compatibility and contains the implementation.
 
 This is a serving-performance benchmark, not a quality benchmark. Prompts are
-expanded to exact token lengths and ``ignore_eos`` forces the requested decode
-length so early EOS does not confound throughput.
+expanded to exact token lengths; requested and realized decode lengths are
+recorded separately so early EOS is visible in the output.
 """
 
 from __future__ import annotations
@@ -148,21 +148,27 @@ def exact_prompt_tokens(
     return combined
 
 
-def completion_body(
-    model: str, prompt: list[int], output_tokens: int, stream: bool
+def message_body(
+    model: str,
+    prompt: list[int],
+    output_tokens: int,
+    stream: bool,
+    tokenizer: Any,
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {
+    # The native Messages endpoint must receive text and applies the model's
+    # chat template before inference. decode() followed by vLLM's re-tokenization
+    # can change exact token boundaries/counts. That is the production behavior
+    # this benchmark needs to measure: cache counters below report reuse for the
+    # actual post-template tokens rather than treating the client-side token IDs
+    # as ground truth.
+    decoded_text = tokenizer.decode(prompt)
+    return {
         "model": model,
-        "prompt": prompt,
         "max_tokens": output_tokens,
         "temperature": 0,
-        "ignore_eos": True,
         "stream": stream,
-        "return_token_ids": True,
+        "messages": [{"role": "user", "content": decoded_text}],
     }
-    if stream:
-        body["stream_options"] = {"include_usage": True}
-    return body
 
 
 async def fetch_metrics(client: httpx.AsyncClient) -> tuple[float, float, str]:
@@ -182,9 +188,11 @@ async def reset_cache(client: httpx.AsyncClient) -> None:
     response.raise_for_status()
 
 
-async def warm_prompt(client: httpx.AsyncClient, model: str, prompt: list[int]) -> None:
+async def warm_prompt(
+    client: httpx.AsyncClient, model: str, prompt: list[int], tokenizer: Any
+) -> None:
     response = await client.post(
-        "/v1/completions", json=completion_body(model, prompt, 1, False)
+        "/v1/messages", json=message_body(model, prompt, 1, False, tokenizer)
     )
     response.raise_for_status()
 
@@ -206,19 +214,20 @@ async def measure_request(
     output_tokens: int,
     request_index: int,
     prompt_id: str,
+    tokenizer: Any,
 ) -> RequestResult:
     result = RequestResult(request_index=request_index, prompt_id=prompt_id)
     started = time.perf_counter()
     first_token_at: float | None = None
     last_token_at: float | None = None
-    counted_token_ids = 0
+    counted_deltas = 0
     usage_output_tokens: int | None = None
 
     try:
         async with client.stream(
             "POST",
-            "/v1/completions",
-            json=completion_body(model, prompt, output_tokens, True),
+            "/v1/messages",
+            json=message_body(model, prompt, output_tokens, True, tokenizer),
         ) as response:
             result.status = response.status_code
             result.response_headers_ms = (time.perf_counter() - started) * 1000
@@ -232,25 +241,25 @@ async def measure_request(
                     continue
                 payload = json.loads(data)
                 usage = payload.get("usage") or {}
-                if usage.get("completion_tokens") is not None:
-                    usage_output_tokens = int(usage["completion_tokens"])
+                if usage.get("output_tokens") is not None:
+                    usage_output_tokens = int(usage["output_tokens"])
 
-                for choice in payload.get("choices") or []:
-                    token_ids = choice.get("token_ids") or []
-                    has_token = bool(token_ids) or bool(choice.get("text"))
-                    if not has_token:
-                        continue
+                # Match edgeproxy.server.relay(): every Anthropic-style
+                # content_block_delta carries incremental generated output.
+                # Timestamp each delta so first-to-last remains the decode
+                # interval, not merely another TTFT measurement.
+                if payload.get("type") == "content_block_delta":
                     now = time.perf_counter()
                     if first_token_at is None:
                         first_token_at = now
                     last_token_at = now
-                    counted_token_ids += len(token_ids)
+                    counted_deltas += 1
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
 
     finished = time.perf_counter()
     result.e2e_ms = (finished - started) * 1000
-    result.output_tokens = usage_output_tokens or counted_token_ids
+    result.output_tokens = usage_output_tokens or counted_deltas
     if first_token_at is not None:
         result.ttft_ms = (first_token_at - started) * 1000
     if last_token_at is not None:
@@ -485,7 +494,7 @@ async def run(args: argparse.Namespace) -> int:
 
             # One unreported request settles imports, kernels, and connection setup.
             smoke_prompt = exact_prompt_tokens(tokenizer, prompts[0][1], 256, args.seed, 0)
-            await warm_prompt(client, args.model, smoke_prompt)
+            await warm_prompt(client, args.model, smoke_prompt, tokenizer)
             await reset_cache(client)
 
             for condition_number, condition in enumerate(conditions, 1):
@@ -507,7 +516,7 @@ async def run(args: argparse.Namespace) -> int:
                 await reset_cache(client)
                 if condition.cache_state == "warm":
                     for _, tokens in selected:
-                        await warm_prompt(client, args.model, tokens)
+                        await warm_prompt(client, args.model, tokens, tokenizer)
 
                 queries_before, hits_before, _ = await fetch_metrics(client)
                 batch_started = time.perf_counter()
@@ -520,6 +529,7 @@ async def run(args: argparse.Namespace) -> int:
                             condition.requested_output_tokens,
                             request_index,
                             prompt_id,
+                            tokenizer,
                         )
                         for request_index, (prompt_id, tokens) in enumerate(selected)
                     ]

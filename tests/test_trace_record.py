@@ -238,6 +238,20 @@ class TraceRecordTests(unittest.TestCase):
         self.assertIsNone(call["tokens"]["prompt_tokens_exact"])
         self.assertEqual(call["tokens"]["usage_integrity"], "partial")
 
+    def test_gateway_zero_exposes_labelled_proxy_observed_input(self):
+        accounting = build_token_accounting(
+            {"input_tokens": 0, "output_tokens": 7},
+            observed_input_tokens=1234,
+            observed_input_source="local_render_probe",
+        )
+
+        self.assertEqual(accounting["provider_input_tokens"], 0)
+        self.assertEqual(accounting["reportable_input_tokens"], 1234)
+        self.assertEqual(
+            accounting["reportable_input_tokens_source"], "local_render_probe"
+        )
+        self.assertFalse(accounting["reportable_input_tokens_exact"])
+
     def test_token_accounting_normalises_detailed_usage(self):
         accounting = build_token_accounting(
             {
@@ -252,6 +266,11 @@ class TraceRecordTests(unittest.TestCase):
             accounting,
             {
                 "input_tokens": 1200,
+                "provider_input_tokens": 1200,
+                "proxy_observed_input_tokens": None,
+                "reportable_input_tokens": 1200,
+                "reportable_input_tokens_source": "provider_usage",
+                "reportable_input_tokens_exact": True,
                 "output_tokens": 50,
                 "tokens_processed": 1250,
                 "cache_read_input_tokens": 800,

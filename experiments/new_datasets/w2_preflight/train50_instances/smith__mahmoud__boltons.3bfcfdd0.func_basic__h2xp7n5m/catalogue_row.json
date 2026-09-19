@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "boltons/cacheutils.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.mahmoud_1776_boltons.3bfcfdd0",
+  "instance_id": "mahmoud__boltons.3bfcfdd0.func_basic__h2xp7n5m",
+  "mutation_locations": [
+    "boltons/cacheutils.py|class MinIDMap:"
+  ],
+  "pass_to_pass_count": 411,
+  "patch_sha256": "9845c876d42466117514b31f1a17beda20101684ee6106c3887b66e4ee44022a",
+  "problem_sha256": "10e2e08fb34d2b1c4f5e89efa8c5a67029dc12370e0545bdae4be5f651a75d0b",
+  "problem_statement": "# MinIDMap.iteritems() returns incorrect values\n\n## Description\n\nPython Version: 3.10.15\n\nI encountered an issue with the `MinIDMap.iteritems()` method in the `boltons.cacheutils` module. The method is not returning the expected values.\n\n## Code to Reproduce\n\n```python\nfrom boltons.cacheutils import MinIDMap\n\nmidm = MinIDMap()\n\nclass Foo:\n    def __init__(self, val):\n        self.val = val\n\n# Add some items to the map\nfoo1 = Foo(1)\nfoo2 = Foo(2)\nfoo3 = Foo(3)\n\nmidm.get(foo1)  # This adds foo1 to the map\nmidm.get(foo2)  # This adds foo2 to the map\nmidm.get(foo3)  # This adds foo3 to the map\n\n# Get the items from the map\nitems = list(midm.iteritems())\n\n# This will fail because the values are incorrect\nfor item in items:\n    print(f\"Key: {item[0].val}, Value: {item[1]}\")\n```\n\n## Expected Behavior\n\nThe `iteritems()` method should return an iterator over the (key, value) pairs in the map, where the value is the ID assigned to the key.\n\n## Actual Behavior\n\nThe method returns incorrect values. It seems to be returning the items in reverse order and accessing the wrong index in the mapping values.\n\nWhen examining the items returned by `iteritems()`, the values don't match what was assigned to the keys. This causes issues when trying to use the map for its intended purpose of maintaining stable IDs for objects.\n\nI believe the issue is related to how the method is iterating over the mapping and accessing the values. The current implementation is using `reversed()` and accessing the last element of each mapping value, which doesn't seem to be the correct approach.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00001-of-00011.parquet",
+    "parquet_sha256": "f15e5b8ab49866e93245a736056fab680d6dde8fb5c2ba89c06241cf12a32afe",
+    "row_index_in_file": 1338
+  },
+  "source_repo": "swesmith/mahmoud__boltons.3bfcfdd0",
+  "source_split": "train",
+  "task_uid": "smith:mahmoud__boltons.3bfcfdd0.func_basic__h2xp7n5m",
+  "upstream_repo": "mahmoud/boltons",
+  "version": null
+}

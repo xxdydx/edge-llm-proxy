@@ -1,0 +1,23 @@
+{
+  "spec_sha256": "20d28d1dd335a3ba28264d88461740ce6d22d74bdb3aae0cb78c8c5193f00cdf",
+  "preflight_sha256": "8cc0b34225ba50501a0710e062deaf9ab9a24fac99b840137fe41324f0abe985",
+  "train_sha256": "1e55f8a2b9d85e87e48b38e6632da75353aaf36c071240a04be87cbcd980b3a6",
+  "validation_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stage": "smoke",
+  "counts": {
+    "train": 2
+  },
+  "shortfall_acceptance": {
+    "shortages": [
+      {
+        "source": "smith",
+        "repo": "mewwts/addict",
+        "required": 10,
+        "eligible_unique_groups": 4
+      }
+    ],
+    "shortages_sha256": "fa31090d0a855acd16fcf0cd8a386b79a79c41f9880ab9b620adf6fe7705ec64",
+    "justification_ref": "shortfall_acceptance_v1.md",
+    "justification_sha256": "82012fe213764c39170b359ccd4b7121de34590c0659e6e2a4b185bb81ba7883"
+  }
+}

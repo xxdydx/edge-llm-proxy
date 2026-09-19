@@ -1,0 +1,4 @@
+# Upstream reference repositories are read-only working material and must not
+# be committed to the public FlowMesh repository.
+_vendor/
+

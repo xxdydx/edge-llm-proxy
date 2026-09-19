@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "h11/_readers.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.python-hyper_1776_h11.bed0dd4a",
+  "instance_id": "python-hyper__h11.bed0dd4a.func_pm_remove_cond__dg2tmvcp",
+  "mutation_locations": [
+    "h11/_readers.py|def _obsolete_line_fold(lines: Iterable[bytes]) -> Iterable[bytes]:"
+  ],
+  "pass_to_pass_count": 75,
+  "patch_sha256": "e51a40bcd2b903cba38f10c457bb5090739802799ab4657ce57edb9cb39b68d0",
+  "problem_sha256": "d7e9243af988ef5a12d6cefacd820ac170ec17fc12f856b201105bb990937d0c",
+  "problem_statement": "[Bug]: HTTP header parsing fails when continuation line appears at start of headers\n\n### Bug summary\n\nThe HTTP header parser in h11 fails to properly handle continuation lines that appear at the start of headers. This used to be properly rejected with a `LocalProtocolError`, but now it silently accepts invalid HTTP headers.\n\n### Code for reproduction\n\n```python\nfrom h11._readers import _obsolete_line_fold\n\n# This should raise an error but now silently accepts invalid input\nlist(_obsolete_line_fold([\n    b'GET /foo HTTP/1.1\\r\\n',\n    b'  continuation line at start\\r\\n',\n    b'Host: example.com\\r\\n',\n    b'\\r\\n'\n]))\n```\n\n### Actual outcome\n\nThe code silently accepts the invalid HTTP header with a continuation line at the start, which is not valid according to the HTTP specification.\n\n### Expected outcome\n\nThe code should raise a `LocalProtocolError` with a message like \"continuation line at start of headers\" when a continuation line appears at the start of headers.\n\n### Additional information\n\nThis is a regression from previous behavior. The HTTP specification doesn't allow continuation lines at the start of headers, as there's no previous header line to continue.\n\nWhen using the library to parse HTTP requests or responses, this can lead to accepting malformed HTTP messages that should be rejected, potentially causing interoperability issues with other HTTP implementations.\n\n### Operating system\n\nLinux\n\n### Python version\n\n3.10\n\n### Installation\n\npip",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 2720
+  },
+  "source_repo": "swesmith/python-hyper__h11.bed0dd4a",
+  "source_split": "train",
+  "task_uid": "smith:python-hyper__h11.bed0dd4a.func_pm_remove_cond__dg2tmvcp",
+  "upstream_repo": "python-hyper/h11",
+  "version": null
+}

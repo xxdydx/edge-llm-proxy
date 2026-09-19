@@ -1,0 +1,95 @@
+{
+  "plan_sha256": "20d28d1dd335a3ba28264d88461740ce6d22d74bdb3aae0cb78c8c5193f00cdf",
+  "counts": {
+    "gym": 2438,
+    "lite": 230,
+    "smith": 50908,
+    "verified": 500
+  },
+  "files": [
+    {
+      "source_key": "gym",
+      "file": "data/train-00000-of-00001.parquet",
+      "sha256": "60569cea74bb281f7a5579467436a2bc1932c6e0c5f2f7fa0d084392abd9ad97",
+      "bytes": 43644473
+    },
+    {
+      "source_key": "lite",
+      "file": "data/train-00000-of-00001.parquet",
+      "sha256": "f3a7cd934e8cc523b6053298d0abb2c82fd7db2b83f9f2ccba5944545aaa4eb1",
+      "bytes": 931193
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00000-of-00011.parquet",
+      "sha256": "302a383bb9229c42063ff2364b2ea637e9e7a20d82e0d566614d3aba9234833d",
+      "bytes": 16852671
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00001-of-00011.parquet",
+      "sha256": "f15e5b8ab49866e93245a736056fab680d6dde8fb5c2ba89c06241cf12a32afe",
+      "bytes": 5574116
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00002-of-00011.parquet",
+      "sha256": "67512898124c03132ae5bbf78866610571a565724dcb6a2064009db8a6825613",
+      "bytes": 6006895
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00003-of-00011.parquet",
+      "sha256": "cc4c9812480faac2bc2de49e78a271d17cc8dcd89a8af2268246c3c8632fd27d",
+      "bytes": 117625772
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00004-of-00011.parquet",
+      "sha256": "6110c76e568c0ee03eb1c86d208887154c6406237f532436cf72ed2c265073ca",
+      "bytes": 9822409
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00005-of-00011.parquet",
+      "sha256": "517420b48132eda3c073e6b9bc5fecbaf34c3dea7f3fec49a46f8615584f8200",
+      "bytes": 7434902
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00006-of-00011.parquet",
+      "sha256": "8e55de0daa541c031779f17d6ef04ebc3a4e2caad708d3137edb4587d89e60f3",
+      "bytes": 12282590
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00007-of-00011.parquet",
+      "sha256": "c558fc3b6507f36ae520a8b23ac0cd71be7d7c8bb15c0b09060fe18d83d21045",
+      "bytes": 6665621
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00008-of-00011.parquet",
+      "sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+      "bytes": 21661282
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00009-of-00011.parquet",
+      "sha256": "20923272dab2706c1e07e9e11a19373c5c642efbb594a3b1c104440cf8cfc132",
+      "bytes": 7641038
+    },
+    {
+      "source_key": "smith",
+      "file": "data/train-00010-of-00011.parquet",
+      "sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+      "bytes": 9078471
+    },
+    {
+      "source_key": "verified",
+      "file": "data/test-00000-of-00001.parquet",
+      "sha256": "a45b1fe4e2f0c8390b2b2938ac83e92ed5979000856808f3679c07812e9e6dcd",
+      "bytes": 2096679
+    }
+  ]
+}

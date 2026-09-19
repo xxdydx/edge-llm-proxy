@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/apispec/ext/marshmallow/__init__.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 5,
+  "image_name": "swebench/swesmith.x86_64.marshmallow-code_1776_apispec.8b421526",
+  "instance_id": "marshmallow-code__apispec.8b421526.func_basic__xgrmyvhf",
+  "mutation_locations": [
+    "src/apispec/ext/marshmallow/__init__.py|class MarshmallowPlugin(BasePlugin):"
+  ],
+  "pass_to_pass_count": 564,
+  "patch_sha256": "5375b8e11e2c8ad3446a5cd9f2831872b7fe19dfc21aa8dc0368abb278a358b0",
+  "problem_sha256": "d3ce5351962850161b51c142234ad0507034f91b75432ca731ca73a51741261d",
+  "problem_statement": "Warning message is incorrect when adding a schema that's already in the spec\n\n### Describe the bug\n\nWhen adding a schema to the spec that has already been added, the warning message is incorrect. It says the schema \"is not yet added to the spec\" when in fact it has already been added.\n\n### How to Reproduce\n\nCreate a schema and add it to the spec twice with different names:\n\n```python\nfrom apispec import APISpec\nfrom apispec.ext.marshmallow import MarshmallowPlugin\nfrom marshmallow import Schema, fields\n\nclass PetSchema(Schema):\n    name = fields.Str()\n    age = fields.Int()\n\n# Create spec\nspec = APISpec(\n    title=\"Pets API\",\n    version=\"1.0.0\",\n    openapi_version=\"3.0.0\",\n    plugins=[MarshmallowPlugin()],\n)\n\n# Add schema first time\nspec.components.schema(\"Pet\", schema=PetSchema)\n\n# Add same schema again with different name\n# This should warn that it's already been added, but the warning is wrong\nspec.components.schema(\"AnotherPet\", schema=PetSchema)\n```\n\n### Expected behavior\n\nThe warning should say that the schema \"has already been added to the spec\" instead of saying it \"is not yet added to the spec\".\n\n### Your project\n\napispec with marshmallow plugin\n\n### Python version\n\n3.8, 3.9, 3.10\n\n### Additional context\n\nThis is confusing because the warning message contradicts what's actually happening. The schema is already in the spec, but the warning suggests it isn't.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 2942
+  },
+  "source_repo": "swesmith/marshmallow-code__apispec.8b421526",
+  "source_split": "train",
+  "task_uid": "smith:marshmallow-code__apispec.8b421526.func_basic__xgrmyvhf",
+  "upstream_repo": "marshmallow-code/apispec",
+  "version": null
+}

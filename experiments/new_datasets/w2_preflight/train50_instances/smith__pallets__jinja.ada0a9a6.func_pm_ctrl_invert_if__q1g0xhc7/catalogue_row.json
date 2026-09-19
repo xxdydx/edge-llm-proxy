@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/jinja2/compiler.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 100,
+  "image_name": "swebench/swesmith.x86_64.pallets_1776_jinja.ada0a9a6",
+  "instance_id": "pallets__jinja.ada0a9a6.func_pm_ctrl_invert_if__q1g0xhc7",
+  "mutation_locations": [
+    "src/jinja2/compiler.py|class CodeGenerator(NodeVisitor):"
+  ],
+  "pass_to_pass_count": 655,
+  "patch_sha256": "be11cb383d4857714bfd789987b86e0fc72352273ac24d3ee8a79759b886e481",
+  "problem_sha256": "c238729b1ec6ceb4b346fe37e245bd46d456cd0a6936ed70f37be3687eec821b",
+  "problem_statement": "Template compilation fails with NotImplementedError for undefined variables\n\nWhen compiling templates that contain undefined variables in certain contexts, Jinja2 raises a `NotImplementedError: unknown load instruction` instead of properly handling the undefined variable case.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom jinja2 import Environment\n\nenv = Environment()\ntmpl = env.from_string(\"{% macro test() %}{{ undefined_var }}{% endmacro %}{{ test() }}\")\ntmpl.render()\n```\n\nThis affects various template constructs including:\n- Macros with undefined variables\n- Set statements with undefined variables  \n- Import/from statements with undefined variables\n- Block statements with undefined variables\n\nThe error occurs during template compilation rather than at render time, preventing templates from being properly compiled even when the undefined variables might be conditionally accessed or have fallback handling.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 884
+  },
+  "source_repo": "swesmith/pallets__jinja.ada0a9a6",
+  "source_split": "train",
+  "task_uid": "smith:pallets__jinja.ada0a9a6.func_pm_ctrl_invert_if__q1g0xhc7",
+  "upstream_repo": "pallets/jinja",
+  "version": null
+}

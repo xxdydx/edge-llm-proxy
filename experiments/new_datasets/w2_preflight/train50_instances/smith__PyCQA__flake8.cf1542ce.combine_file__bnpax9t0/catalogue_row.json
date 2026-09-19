@@ -1,0 +1,34 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/flake8/options/config.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 41,
+  "image_name": "swebench/swesmith.x86_64.pycqa_1776_flake8.cf1542ce",
+  "instance_id": "PyCQA__flake8.cf1542ce.combine_file__bnpax9t0",
+  "mutation_locations": [
+    "src/flake8/options/config.py|def _stat_key(s: str) -> tuple[int, int]:",
+    "src/flake8/options/config.py|def load_config(",
+    "src/flake8/options/config.py|def parse_config("
+  ],
+  "pass_to_pass_count": 378,
+  "patch_sha256": "83793a7e8a7e467801d281ff5078000f8f4b33392bef6289788e929e22fcdc7a",
+  "problem_sha256": "c85ea8f047d81cdecd0f806e8d57108da9461e7c6c0d277433221c6c1619efcd",
+  "problem_statement": "# Flake8 configuration file handling issues\n\n## Description\n\nI've discovered several issues with how Flake8 handles configuration files:\n\n1. Configuration files are being read with UTF-16 encoding instead of UTF-8, causing parsing failures for most standard config files\n2. The search order for config files has changed from `setup.cfg, tox.ini, .flake8` to `.flake8, setup.cfg, tox.ini`\n3. When checking if a file is a valid config, it looks for `\"flake\"` section instead of `\"flake8\"` \n4. The directory traversal when searching for config files is broken - it's using the home directory path instead of the parent directory\n5. When loading config files, it's using `os.path.abspath(\"..\")` instead of `os.path.abspath(\".\")`, causing it to look in the parent directory\n6. The isolated mode logic is inverted - it returns early when NOT isolated instead of when isolated\n\n## Steps to Reproduce\n\nCreate a simple project with a configuration file:\n\n```\n# setup.cfg\n[flake8]\nignore = E203\nselect = E,F,W\n```\n\nAnd a Python file with a style issue:\n\n```python\n# test.py\ndef foo():\n    x = [1, 2, 3]\n    return x[ 0 ]  # E203 whitespace before ']'\n```\n\nRun flake8:\n\n```\nflake8 test.py\n```\n\n## Expected Results\n\nFlake8 should find and correctly parse the configuration file, respecting the settings like ignoring E203.\n\n## Actual Results\n\nFlake8 fails to find or properly parse configuration files. It either:\n- Doesn't find the config file at all\n- Tries to parse it with the wrong encoding (UTF-16)\n- Looks in the wrong directory\n- Looks for the wrong section name\n- Has the isolated mode logic inverted\n\nThis causes Flake8 to ignore user configuration and fall back to defaults, or in some cases, fail with errors about invalid configuration files.\n\n## Environment\n\n- Flake8 version: 6.0.0\n- Python version: 3.10\n- OS: Linux/macOS/Windows",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00001-of-00011.parquet",
+    "parquet_sha256": "f15e5b8ab49866e93245a736056fab680d6dde8fb5c2ba89c06241cf12a32afe",
+    "row_index_in_file": 574
+  },
+  "source_repo": "swesmith/PyCQA__flake8.cf1542ce",
+  "source_split": "train",
+  "task_uid": "smith:PyCQA__flake8.cf1542ce.combine_file__bnpax9t0",
+  "upstream_repo": "pycqa/flake8",
+  "version": null
+}

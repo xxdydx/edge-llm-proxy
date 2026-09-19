@@ -53,13 +53,18 @@ def _agent_delegations(response: Any) -> list[tuple[str, str]]:
     return delegations
 
 
+def agent_delegation_count(response: Any) -> int:
+    """Count valid Agent delegations in a completed response."""
+    return len(_agent_delegations(response))
+
+
 @dataclass
 class _ObservedCohort:
     cohort_id: str
     session_id: str
     parent_call_id: str
     parent_backend: str | None
-    completed_at_unix_s: float
+    last_observed_at_unix_s: float
     prompts_by_tool: dict[str, str]
     first_arrival_unix_s: float | None = None
     arrived_tools: set[str] = field(default_factory=set)
@@ -84,34 +89,96 @@ class CohortTracker:
         response: Any,
         completed_at_unix_s: float,
     ) -> dict[str, Any] | None:
-        """Register one completed response that emitted valid Agent delegations."""
+        """Reconcile all Agent delegations from a completed response.
+
+        Streaming callers register each block earlier through
+        :meth:`register_delegation`; this remains the non-streaming path and a
+        safety net for incomplete/unusual streams. Tool-use IDs make the two
+        paths idempotent.
+        """
         if not session_id:
             return None
         delegations = _agent_delegations(response)
         if not delegations:
             return None
-        cohort = _ObservedCohort(
-            cohort_id=_cohort_id(str(session_id), str(call_id)),
-            session_id=str(session_id),
-            parent_call_id=str(call_id),
-            parent_backend=backend,
-            completed_at_unix_s=float(completed_at_unix_s),
-            prompts_by_tool=dict(delegations),
-        )
+        detection = None
+        for tool_use_id, prompt in delegations:
+            detection = self.register_delegation(
+                call_id=call_id,
+                session_id=session_id,
+                backend=backend,
+                tool_use_id=tool_use_id,
+                prompt=prompt,
+                observed_at_unix_s=completed_at_unix_s,
+            )
+        return detection
+
+    def register_delegation(
+        self,
+        *,
+        call_id: str,
+        session_id: str | None,
+        backend: str | None,
+        tool_use_id: str,
+        prompt: str,
+        observed_at_unix_s: float,
+    ) -> dict[str, Any] | None:
+        """Register one completed Agent tool-use block, once per tool-use ID."""
+        if (
+            not session_id
+            or not tool_use_id
+            or not isinstance(prompt, str)
+            or not prompt
+        ):
+            return None
+        session_id = str(session_id)
+        call_id = str(call_id)
+        tool_use_id = str(tool_use_id)
+        prompt = str(prompt)
+        observed_at_unix_s = float(observed_at_unix_s)
+        cohort_id = _cohort_id(session_id, call_id)
+
         with self._lock:
-            self._cohorts.append(cohort)
-        return {
-            "schema_version": 1,
-            "cohort_id": cohort.cohort_id,
-            "role": "parent",
-            "parent_call_id": cohort.parent_call_id,
-            "parent_backend": cohort.parent_backend,
-            "expected_width": len(cohort.prompts_by_tool),
-            "detection_method": "parent_agent_tool_uses",
-            "detection_confidence": "exact",
-            "observe_only": True,
-            "configured_window_ms": self.window_ms,
-        }
+            cohort = next(
+                (item for item in self._cohorts if item.cohort_id == cohort_id),
+                None,
+            )
+            if cohort is None:
+                cohort = _ObservedCohort(
+                    cohort_id=cohort_id,
+                    session_id=session_id,
+                    parent_call_id=call_id,
+                    parent_backend=backend,
+                    last_observed_at_unix_s=observed_at_unix_s,
+                    prompts_by_tool={},
+                )
+                self._cohorts.append(cohort)
+
+            # The first completed form of a stable tool-use ID is authoritative.
+            # Replays from finalize_structured_call() therefore cannot duplicate
+            # or rewrite a delegation that a child may already have matched.
+            if tool_use_id not in cohort.prompts_by_tool:
+                cohort.prompts_by_tool[tool_use_id] = prompt
+                cohort.last_observed_at_unix_s = max(
+                    cohort.last_observed_at_unix_s, observed_at_unix_s
+                )
+            if cohort.parent_backend is None:
+                cohort.parent_backend = backend
+            expected_width = len(cohort.prompts_by_tool)
+            detection = {
+                "schema_version": 1,
+                "cohort_id": cohort.cohort_id,
+                "role": "parent",
+                "parent_call_id": cohort.parent_call_id,
+                "parent_backend": cohort.parent_backend,
+                "expected_width": expected_width,
+                "detection_method": "parent_agent_tool_uses",
+                "detection_confidence": "exact",
+                "observe_only": True,
+                "configured_window_ms": self.window_ms,
+            }
+
+        return detection
 
     def match_child(
         self,
@@ -138,7 +205,7 @@ class CohortTracker:
             # proxied traffic, and the lower confidence makes that ambiguity visible.
             matches.sort(
                 key=lambda item: (
-                    item[0].completed_at_unix_s,
+                    item[0].last_observed_at_unix_s,
                     item[0].cohort_id,
                     item[1],
                 ),
@@ -154,15 +221,25 @@ class CohortTracker:
                 (float(arrived_at_unix_s) - cohort.first_arrival_unix_s) * 1000,
             )
             arrival_index = len(cohort.arrived_tools)
+            expected_width = len(cohort.prompts_by_tool)
+            # Dict insertion order is delegation registration order.  This is
+            # the deterministic leader tie-break consumed by the adjacent
+            # dispatch coordinator; match_child itself still never routes or
+            # waits.
+            leader_tool_use_id = next(iter(cohort.prompts_by_tool))
+            cohort_id = cohort.cohort_id
+            parent_call_id = cohort.parent_call_id
+            parent_backend = cohort.parent_backend
 
         return {
             "schema_version": 1,
-            "cohort_id": cohort.cohort_id,
+            "cohort_id": cohort_id,
             "role": "child",
-            "parent_call_id": cohort.parent_call_id,
+            "parent_call_id": parent_call_id,
             "parent_tool_use_id": tool_id,
-            "parent_backend": cohort.parent_backend,
-            "expected_width": len(cohort.prompts_by_tool),
+            "leader_tool_use_id": leader_tool_use_id,
+            "parent_backend": parent_backend,
+            "expected_width": expected_width,
             "ready_width_at_arrival": arrival_index,
             "arrival_offset_ms": round(offset_ms, 3),
             "configured_window_ms": self.window_ms,

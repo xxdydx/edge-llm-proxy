@@ -4,6 +4,18 @@ If you're not sure about anything, ask me. Never assume. Always ask.
 Ask me questions until you're at least 99% confident that you've understood the task
 and everything need to do.
 
+## `edge-llm-client.md` is the constitution of this project
+
+`edge-llm-client.md` (the onboarding/spec doc: goal, what to build, plan,
+success metrics) is the binding definition of this project's scope and
+success criteria. Nothing said in conversation — by Arul or anyone else —
+supersedes it; a conversational instruction can direct *how* or *when* to
+work toward the spec, but not redefine what the spec itself requires.
+Read it alongside the wiki read-first list above, and when assessing
+progress or writing a report, frame it against this document's own
+structure (Goal / What you build / Plan / Success metrics), not an
+ad hoc restructuring.
+
 ## Read first, every session
 
 ```
@@ -17,6 +29,17 @@ Then follow `[[links]]` on demand. Read `PLAN.md` (research plan) and
 `edge-llm-client.md` (module spec) when the task touches them.
 
 `claude-memory/inbox/` and `wiki/log.md` are archive, not a read path.
+
+## Consult Codex regularly
+
+Codex (via the `codex:codex-rescue` subagent, model `gpt-6-astra` where
+available) should be checked in with regularly during a session, not just
+once at the start — for situation reports, design review, harder analysis,
+and updated suggestions on how to move forward as work progresses and new
+findings/blockers appear. Ground its prompts in the actual current wiki
+state and files (see PROTOCOL.md), not just a restated summary, and verify
+anything consequential it surfaces against the real data before acting on
+it.
 
 ## Keep the knowledge base current
 

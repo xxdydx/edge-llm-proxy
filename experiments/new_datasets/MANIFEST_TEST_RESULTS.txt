@@ -1,0 +1,21 @@
+test_alias_group_exposure_exclusion (test_manifest.ManifestTests.test_alias_group_exposure_exclusion) ... ok
+test_bad_runtime_rejected (test_manifest.ManifestTests.test_bad_runtime_rejected) ... ok
+test_exact_counts_and_groups (test_manifest.ManifestTests.test_exact_counts_and_groups) ... ok
+test_exact_source_quotas (test_manifest.ManifestTests.test_exact_source_quotas) ... ok
+test_finalise_smoke_then_all (test_manifest.ManifestTests.test_finalise_smoke_then_all) ... ok
+test_input_order_invariance (test_manifest.ManifestTests.test_input_order_invariance) ... ok
+test_model_outcomes_do_not_select (test_manifest.ManifestTests.test_model_outcomes_do_not_select) ... ok
+test_non_python_or_test_mutation_excluded (test_manifest.ManifestTests.test_non_python_or_test_mutation_excluded) ... ok
+test_pending_does_not_freeze (test_manifest.ManifestTests.test_pending_does_not_freeze) ... ok
+test_preflight_replacement_same_repo_split (test_manifest.ManifestTests.test_preflight_replacement_same_repo_split) ... ok
+test_previous_frozen_assignment_immutable (test_manifest.ManifestTests.test_previous_frozen_assignment_immutable) ... ok
+test_semantic_failure_not_preflight_replacement (test_manifest.ManifestTests.test_semantic_failure_not_preflight_replacement) ... ok
+test_shortfall_fails_instead_of_inventing (test_manifest.ManifestTests.test_shortfall_fails_instead_of_inventing) ... ok
+test_source_field_semantics (test_manifest.ManifestTests.test_source_field_semantics) ... ok
+test_source_revision_mismatch (test_manifest.ManifestTests.test_source_revision_mismatch) ... ok
+test_synthetic_validation_repos_held_out (test_manifest.ManifestTests.test_synthetic_validation_repos_held_out) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 1.763s
+
+OK

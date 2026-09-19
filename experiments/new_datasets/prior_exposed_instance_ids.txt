@@ -1,0 +1,172 @@
+# Prior-exposure exclusion inventory for claude_code_collection_v2.
+# One source instance_id or source_key:instance_id per line; # = comment.
+#
+# Audit performed 2026-09-18 (see AUDIT.md section 4 for full method/detail):
+#   1. eval-suite/swebench/instances/*.json (90 files) grepped for both smoke
+#      IDs and every allowlisted repo in TASK_SOURCE_LOCK.json -> zero overlap
+#      (all existing instance files are NodeBB/ansible/etc, outside this
+#      campaign's 32-repo allowlist).
+#   2. Whole-repo ripgrep (git-tracked files, all json/jsonl/md/txt/py,
+#      excluding this packet's own directory) for every allowlisted repo's
+#      "owner/repo" and "owner__repo" spellings -> zero hits anywhere in the
+#      project outside this packet.
+#   3. traces/ (gitignored, 2.4GB, 594 run directories) is not git-tracked so
+#      step 2 could not see it. Directory names encode task/repo identity
+#      project-wide (pattern: <campaign>-run-<policy>-<timestamp>-<task-slug>,
+#      task-slug = "swebench-<repo>-<hash>" for SWE-bench-Pro runs, or a
+#      short MBPP/generic-prompt slug otherwise). Enumerated all 594 unique
+#      task slugs: the only repos ever touched are NodeBB, ansible, astropy,
+#      django, elementweb, flask, flipt, matplotlib, openlibrary, pylint,
+#      pytest, qutebrowser, requests, scikit-learn, seaborn, sphinx, sympy,
+#      xarray (all SWE-bench-Pro, an entirely different task corpus) plus
+#      non-repo MBPP/generic-prompt slugs (fix-*, refactor-*, explore-*,
+#      fanout-*, etc). None overlap this campaign's 32-repo allowlist
+#      (getmoto/moto, python/mypy, pydantic/pydantic, facebookresearch/hydra,
+#      iterative/dvc, conan-io/conan, pandas-dev/pandas, dask/dask,
+#      pallets/click, pallets/jinja, pallets/markupsafe,
+#      marshmallow-code/marshmallow, marshmallow-code/apispec,
+#      python-jsonschema/jsonschema, oauthlib/oauthlib, mahmoud/boltons,
+#      mewwts/addict, arrow-py/arrow, spulec/freezegun, suor/funcy,
+#      gruns/furl, python-hyper/h11, theskumar/python-dotenv, pycqa/flake8,
+#      davidhalter/parso, erikrose/parsimonious, r1chardj0n3s/parse,
+#      lepture/mistune, mozilla/bleach, seperman/deepdiff,
+#      cloudpipe/cloudpickle, cookiecutter/cookiecutter).
+#
+# Scope limitation: this checks directory-name-level task identity inside
+# traces/, not the byte content of every raw request/response file (2.4GB;
+# full-content grep was not run there). Directory naming has been the
+# project's consistent task-identity convention throughout (verified across
+# all 594 dirs, no exceptions found), so this is treated as a reliable
+# proxy, not a byte-level guarantee.
+#
+# Result for the 32-repo dev/synthetic allowlist (training+validation):
+# zero known prior exposure. No IDs excluded on that basis.
+#
+# SEPARATE FINDING, added after first `select` run (2026-09-18): the
+# section-4.9 Verified final-evaluation reserve draws from
+# princeton-nlp/SWE-bench_Verified, whose repositories (astropy, django,
+# matplotlib, seaborn, flask, requests, xarray, pylint, pytest,
+# scikit-learn, sphinx, sympy, plus non-Verified-source repos NodeBB,
+# ansible, elementweb, flipt, openlibrary, qutebrowser) overlap this
+# project's actual historical SWE-bench-Pro-15 campaign corpus (see
+# traces/ directory names above). A first unfiltered `select` run put 19
+# of its 100 sampled final-reserved instance_ids in exact literal overlap
+# with instance_ids already defined in this project's own
+# eval-suite/swebench/*.json files (used to launch/grade those past
+# campaigns) -- e.g. astropy__astropy-13033, psf__requests-1142,
+# pylint-dev__pylint-4551. That is real, not coincidental, prior exposure
+# and would have broken the "reserve stays untouched" requirement had it
+# gone unaudited.
+#
+# Extracted every `instance_id` value appearing anywhere in
+# eval-suite/swebench/**/*.json (606 files; recursive key search, dict and
+# list) via a Python script (find_ids), verbatim output below -- not
+# retyped or paraphrased. 90 distinct historical instance_ids, all excluded
+# from this campaign's Verified final-reservation pool. Most use the
+# SWE-bench-Pro id format (instance_<owner>__<repo>-<hash>-v<hash>), which
+# cannot literally string-match a Verified id; only the plain
+# owner__repo-<number> entries below (astropy/django/matplotlib/seaborn/
+# flask/requests/xarray/pylint/pytest/scikit-learn/sphinx/sympy) are the
+# ones actually capable of colliding with Verified's id format, and did
+# collide (19 of them, see above). None of the 90 belong to any of the 32
+# dev/synthetic allowlist repos, so this exclusion has zero effect on
+# train/validation selection -- it only changes which Verified IDs can be
+# drawn into final_reserved.
+#
+# Residual scope limitation: this is the static per-task JSON definitions,
+# not a byte-level scan of the 2.4GB traces/ payloads or a check of
+# whether traces/ directories reference additional instance_ids under
+# different/newer hash suffixes than these 90 files capture. Treat the
+# post-rerun final-reserve as "audited against known local task
+# definitions," not as a byte-level exhaustive guarantee.
+
+astropy__astropy-12907
+astropy__astropy-13033
+astropy__astropy-14365
+django__django-10097
+django__django-10554
+instance_NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5-vnan
+instance_NodeBB__NodeBB-51d8f3b195bddb13a13ddc0de110722774d9bb1b-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e
+instance_ansible__ansible-12734fa21c08a0ce8c84e533abdc560db2eb1955-v7eee2454f617569fd6889f2211f75bc02a35f9f8
+instance_ansible__ansible-395e5e20fab9cad517243372fa3c3c5d9e09ab2a-v7eee2454f617569fd6889f2211f75bc02a35f9f8
+instance_ansible__ansible-39bd8b99ec8c6624207bf3556ac7f9626dad9173-v1055803c3a812189a1133297f7f5468579283f86
+instance_ansible__ansible-5e88cd9972f10b66dd97e1ee684c910c6a2dd25e-v906c969b551b346ef54a2c0b41e04f632b7b73c2
+instance_ansible__ansible-a02e22e902a69aeb465f16bf03f7f5a91b2cb828-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5
+instance_ansible__ansible-b5e0293645570f3f404ad1dbbe5f006956ada0df-v0f01c69f1e2528b935359cfe578530722bca2c59
+instance_ansible__ansible-cd473dfb2fdbc97acf3293c134b21cbbcfa89ec3-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5
+instance_ansible__ansible-d30fc6c0b359f631130b0e979d9a78a7b3747d48-v1055803c3a812189a1133297f7f5468579283f86
+instance_ansible__ansible-d58e69c82d7edd0583dd8e78d76b075c33c3151e-v173091e2e36d38c978002990795f66cfc0af30ad
+instance_ansible__ansible-e22e103cdf8edc56ff7d9b848a58f94f1471a263-v1055803c3a812189a1133297f7f5468579283f86
+instance_ansible__ansible-e9e6001263f51103e96e58ad382660df0f3d0e39-v30a923fb5c164d6cd18280c02422f75e611e8fb2
+instance_ansible__ansible-f86c58e2d235d8b96029d102c71ee2dfafd57997-v0f01c69f1e2528b935359cfe578530722bca2c59
+instance_ansible__ansible-f8ef34672b961a95ec7282643679492862c688ec-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5
+instance_element-hq__element-web-5dfde12c1c1c0b6e48f17e3405468593e39d9492-vnan
+instance_flipt-io__flipt-3b2c25ee8a3ac247c3fad13ad8d64ace34ec8ee7
+instance_flipt-io__flipt-c12967bc73fdf02054cf3ef8498c05e25f0a18c0
+instance_future-architect__vuls-407407d306e9431d6aa0ab566baa6e44e5ba2904
+instance_future-architect__vuls-e6c0da61324a0c04026ffd1c031436ee2be9503a
+instance_gravitational__teleport-c782838c3a174fdff80cafd8cd3b1aa4dae8beb2
+instance_internetarchive__openlibrary-03095f2680f7516fca35a58e665bf2a41f006273-v8717e18970bcdc4e0d2cea3b1527752b21e74866
+instance_internetarchive__openlibrary-1be7de788a444f6255e89c10ef6aa608550604a8-v29f82c9cf21d57b242f8d8b0e541525d259e2d63
+instance_internetarchive__openlibrary-53d376b148897466bb86d5accb51912bbbe9a8ed-v08d8e8889ec945ab821fb156c04c7d2e2810debb
+instance_internetarchive__openlibrary-58999808a17a26b387f8237860a7a524d1e2d262-v08d8e8889ec945ab821fb156c04c7d2e2810debb
+instance_internetarchive__openlibrary-5fb312632097be7e9ac6ab657964af115224d15d-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4
+instance_internetarchive__openlibrary-62d2243131a9c7e6aee00d1e9c5660fd5b594e89-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4
+instance_internetarchive__openlibrary-6a117fab6c963b74dc1ba907d838e74f76d34a4b-v13642507b4fc1f8d234172bf8129942da2c2ca26
+instance_internetarchive__openlibrary-6fdbbeee4c0a7e976ff3e46fb1d36f4eb110c428-v08d8e8889ec945ab821fb156c04c7d2e2810debb
+instance_internetarchive__openlibrary-798a582540019363d14b2090755cc7b89a350788-v430f20c722405e462d9ef44dee7d34c41e76fe7a
+instance_internetarchive__openlibrary-910b08570210509f3bcfebf35c093a48243fe754-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4
+instance_internetarchive__openlibrary-9c392b60e2c6fa1d68cb68084b4b4ff04d0cb35c-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59
+instance_internetarchive__openlibrary-a7b7dc5735a1b3a9824376b1b469b556dd413981-va4315b5dc369c1ef66ae22f9ae4267aa3114e1b3
+instance_internetarchive__openlibrary-bb152d23c004f3d68986877143bb0f83531fe401-ve8c8d62a2b60610a3c4631f5f23ed866bada9818
+instance_internetarchive__openlibrary-c05ccf2cd8baa81609434e0e35c4a63bc0da5a25-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4
+instance_navidrome__navidrome-7073d18b54da7e53274d11c9e2baef1242e8769e
+instance_navidrome__navidrome-b65e76293a917ee2dfc5d4b373b1c62e054d0dca
+instance_protonmail__webclients-2c3559cad02d1090985dba7e8eb5a129144d9811
+instance_qutebrowser__qutebrowser-233cb1cc48635130e5602549856a6fa4ab4c087f-v35616345bb8052ea303186706cec663146f0f184
+instance_qutebrowser__qutebrowser-5fdc83e5da6222fe61163395baaad7ae57fa2cb4-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d
+instance_qutebrowser__qutebrowser-8d05f0282a271bfd45e614238bd1b555c58b3fc1-v35616345bb8052ea303186706cec663146f0f184
+instance_qutebrowser__qutebrowser-c0be28ebee3e1837aaf3f30ec534ccd6d038f129-v9f8e9d96c85c85a605e382f1510bd08563afc566
+instance_qutebrowser__qutebrowser-e15d26630934d0b6415ed2295ac42fd570a57620-va0fd88aac89cde702ec1ba84877234da33adce8a
+instance_qutebrowser__qutebrowser-e64622cd2df5b521342cf4a62e0d4cb8f8c9ae5a-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d
+instance_qutebrowser__qutebrowser-ed19d7f58b2664bb310c7cb6b52c5b9a06ea60b2-v059c6fdc75567943479b23ebca7c07b5e9a7f34c
+instance_qutebrowser__qutebrowser-f8e7fea0becae25ae20606f1422068137189fe9e
+instance_qutebrowser__qutebrowser-fea33d607fde83cf505b228238cf365936437a63-v9f8e9d96c85c85a605e382f1510bd08563afc566
+instance_qutebrowser__qutebrowser-ff1c025ad3210506fc76e1f604d8c8c27637d88e-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d
+matplotlib__matplotlib-13989
+matplotlib__matplotlib-14623
+matplotlib__matplotlib-20676
+matplotlib__matplotlib-24637
+mwaskom__seaborn-3069
+mwaskom__seaborn-3187
+pallets__flask-5014
+psf__requests-1142
+psf__requests-1724
+psf__requests-1766
+psf__requests-2931
+pydata__xarray-2905
+pydata__xarray-3095
+pydata__xarray-3151
+pydata__xarray-3677
+pydata__xarray-4629
+pylint-dev__pylint-4551
+pylint-dev__pylint-4604
+pylint-dev__pylint-4970
+pylint-dev__pylint-6386
+pylint-dev__pylint-6903
+pytest-dev__pytest-10051
+pytest-dev__pytest-10081
+pytest-dev__pytest-5631
+pytest-dev__pytest-7571
+pytest-dev__pytest-8399
+scikit-learn__scikit-learn-10297
+scikit-learn__scikit-learn-13328
+scikit-learn__scikit-learn-13779
+scikit-learn__scikit-learn-14053
+sphinx-doc__sphinx-10323
+sphinx-doc__sphinx-8721
+sphinx-doc__sphinx-9711
+sympy__sympy-11618
+sympy__sympy-12481
+sympy__sympy-20916
+sympy__sympy-24443

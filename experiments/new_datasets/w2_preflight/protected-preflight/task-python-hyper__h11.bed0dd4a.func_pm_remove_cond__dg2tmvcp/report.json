@@ -1,0 +1,12 @@
+{
+  "task_uid": "smith:python-hyper__h11.bed0dd4a.func_pm_remove_cond__dg2tmvcp",
+  "instance_id": "python-hyper__h11.bed0dd4a.func_pm_remove_cond__dg2tmvcp",
+  "status": "fail",
+  "rejection_reason": "unsupported_architecture",
+  "source_key": "smith",
+  "source_image_reference": "swebench/swesmith.x86_64.python-hyper_1776_h11.bed0dd4a",
+  "required_platform": "linux/amd64 (image reference is x86_64) ",
+  "host_platform": "linux/arm64/v8",
+  "harness": "SWE-Gym/SWE-Bench-Fork vendored official adapter",
+  "evidence": "The vendored harness has no SWE-smith adapter/semantics; the pinned Smith row supplies an x86_64 image reference and no base_commit/version. Native-arm64 execution was not emulated or substituted."
+}

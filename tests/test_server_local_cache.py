@@ -9,7 +9,12 @@ from edgeproxy.config import Config
 from edgeproxy.server import _apply_local_generation_controls, make_app
 
 
-def config(trace_dir: Path, *, policy: str = "static") -> Config:
+def config(
+    trace_dir: Path,
+    *,
+    policy: str = "static",
+    local_cache_salt_scope: str = "off",
+) -> Config:
     return Config(
         host="127.0.0.1",
         port=0,
@@ -28,6 +33,8 @@ def config(trace_dir: Path, *, policy: str = "static") -> Config:
         kv_bytes_per_token=None,
         cloud_cache_tracking="off",
         local_cache_tracking="observe",
+        episode_id="salt-test-episode",
+        local_cache_salt_scope=local_cache_salt_scope,
     )
 
 
@@ -39,7 +46,67 @@ def records(trace_dir: Path) -> list[dict]:
 
 
 class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_cache_salt_is_shared_by_probe_and_generation_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace_dir = Path(directory)
+            app = make_app(config(trace_dir, local_cache_salt_scope="request"))
+            probes = []
+            generations = []
+
+            def local(request: httpx.Request) -> httpx.Response:
+                body = json.loads(request.content)
+                if request.url.path.endswith("/count_cached_tokens"):
+                    probes.append(body)
+                    return httpx.Response(
+                        200, json={"input_tokens": 10, "cached_tokens": 0}
+                    )
+                generations.append(body)
+                return httpx.Response(
+                    200,
+                    json={
+                        "type": "message",
+                        "stop_reason": "end_turn",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "usage": {"input_tokens": 10, "output_tokens": 1},
+                    },
+                )
+
+            incoming = {
+                "model": "claude-sonnet-5",
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": "identical"}],
+            }
+            async with app.router.lifespan_context(app):
+                await app.state.clients["local"].aclose()
+                app.state.clients["local"] = httpx.AsyncClient(
+                    base_url="http://local.test", transport=httpx.MockTransport(local)
+                )
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url="http://edge.test",
+                ) as client:
+                    for _ in range(2):
+                        response = await client.post("/v1/messages", json=incoming)
+                        self.assertEqual(response.status_code, 200)
+
+            self.assertEqual(len(probes), 2)
+            self.assertEqual(len(generations), 2)
+            self.assertNotEqual(probes[0]["cache_salt"], probes[1]["cache_salt"])
+            for probe, generation in zip(probes, generations):
+                self.assertEqual(probe["cache_salt"], generation["cache_salt"])
+                self.assertEqual(probe["messages"], incoming["messages"])
+                self.assertEqual(generation["messages"], incoming["messages"])
+            self.assertNotIn("cache_salt", incoming)
+            self.assertTrue(
+                all(row["local_cache_salt_scope"] == "request" for row in records(trace_dir))
+            )
+
     async def test_local_controls_translate_claude_high_effort_for_qwen(self):
+        # Qwen's chat template rejects "high" outright, so it always needs
+        # remapping. Currently aliased to "medium" (not "xhigh") as of
+        # 2026-09-04 -- see LOCAL_REASONING_EFFORT_ALIASES's comment and
+        # claude-memory/wiki/decisions/Lower local reasoning effort from
+        # xhigh to medium.md for why.
         request = {
             "temperature": 0.4,
             "output_config": {"effort": "high"},
@@ -52,7 +119,7 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original_temperature, 0.4)
         self.assertEqual(strict_tools_added, 0)
         self.assertEqual(request["temperature"], 0)
-        self.assertEqual(request["output_config"]["effort"], "xhigh")
+        self.assertEqual(request["output_config"]["effort"], "medium")
 
     async def test_local_controls_leave_supported_effort_unchanged(self):
         request = {"output_config": {"effort": "medium"}}
@@ -159,6 +226,7 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record["placement"], "local")
             self.assertNotIn("est_prompt_tokens", record["features"])
             self.assertEqual(record["features"]["local_prompt_tokens"], 100)
+            self.assertEqual(record["features"]["local_token_budget"], 54_000)
             self.assertEqual(
                 record["local_cache"]["prediction"]["estimated_read_tokens"], 96
             )

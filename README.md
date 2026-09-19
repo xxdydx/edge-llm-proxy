@@ -9,6 +9,18 @@ Dev runs on disposable FlowMesh GPU boxes. The Qwen2.5-7B baseline uses an RTX
 (currently RTX 5090 or RTX 6000 Ada). Sessions are wiped on TTL
 expiry, so each box is bootstrapped from the selected setup profile.
 
+For boxes created manually from the pinned image and exposed as a command such
+as `ssh -p 31226 gw@lum.id`, use the automated direct-SSH workflow:
+
+```bash
+./direct-gpu.sh up --setup qwen38-27b --ssh-port 31226
+```
+
+It validates the GPU, streams a secrets-free working tree without SCP, runs
+bootstrap in remote tmux, verifies the exact model/context/KV configuration
+with a real completion, and leaves a persistent laptop relay. See
+[`DIRECT_GPU_WORKFLOW.md`](DIRECT_GPU_WORKFLOW.md).
+
 ---
 
 ## Setup (once)

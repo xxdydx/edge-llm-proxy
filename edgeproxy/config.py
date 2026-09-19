@@ -36,11 +36,17 @@ class Config:
     experiment_id: str | None = None
     episode_id: str | None = None
     cohort_tracking: str = "off"
-    cohort_window_ms: float = 200.0
+    cohort_window_ms: float = 300.0
+    cohort_parent_placement: bool = False
+    cohort_barrier_timeout_ms: float = 5_000.0
+    cohort_barrier_poll_ms: float = 25.0
     local_cache_tracking: str = "off"
     max_local_tokens: int = 60_000
     local_token_margin: float = 0.9
     local_output_reserve_tokens: int = 0
+    local_concurrency_limit: int = 8
+    local_cache_salt_scope: str = "off"
+    agentic_shadow_artifact: Path | None = None
 
     @property
     def backends(self) -> dict[str, str]:
@@ -80,7 +86,16 @@ def parse_args(argv: list[str] | None = None) -> Config:
     p.add_argument(
         "--policy",
         default=env("EDGEPROXY_POLICY", "static"),
-        help="placement policy: cloud-only | local-only | static",
+        help=(
+            "placement policy: cloud-only | local-only | static | warm-local | "
+            "branch-drift | predicted-risk | planning-escalation | all-improvements"
+        ),
+    )
+    p.add_argument(
+        "--agentic-shadow-artifact",
+        type=Path,
+        default=Path(env("EDGEPROXY_AGENTIC_SHADOW_ARTIFACT")) if env("EDGEPROXY_AGENTIC_SHADOW_ARTIFACT") else None,
+        help="versioned shadow-only harm artifact; records proposals without changing placement",
     )
     p.add_argument(
         "--local-model-name",
@@ -122,6 +137,15 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="probe live vLLM prefix residency before placement",
     )
     p.add_argument(
+        "--local-cache-salt-scope",
+        default=env("EDGEPROXY_LOCAL_CACHE_SALT_SCOPE", "off"),
+        choices=["off", "condition", "request"],
+        help=(
+            "vLLM prefix-cache namespace: shared default, one namespace per "
+            "episode, or one namespace per request for cache-sharing ablations"
+        ),
+    )
+    p.add_argument(
         "--cohort-tracking",
         default=env("EDGEPROXY_COHORT_TRACKING", "off"),
         choices=["off", "observe"],
@@ -130,8 +154,25 @@ def parse_args(argv: list[str] | None = None) -> Config:
     p.add_argument(
         "--cohort-window-ms",
         type=float,
-        default=float(env("EDGEPROXY_COHORT_WINDOW_MS", "200")),
+        default=float(env("EDGEPROXY_COHORT_WINDOW_MS", "300")),
         help="measured fan-out collection window recorded by observe mode",
+    )
+    p.add_argument(
+        "--cohort-parent-placement",
+        action="store_true",
+        help="benchmark opt-in: force Agent-capable unmatched parent candidates cloud",
+    )
+    p.add_argument(
+        "--cohort-barrier-timeout-ms",
+        type=float,
+        default=float(env("EDGEPROXY_COHORT_BARRIER_TIMEOUT_MS", "5000")),
+        help="maximum deterministic-leader cache-warming wait for local followers",
+    )
+    p.add_argument(
+        "--cohort-barrier-poll-ms",
+        type=float,
+        default=float(env("EDGEPROXY_COHORT_BARRIER_POLL_MS", "25")),
+        help="interval between async local-cache probes while a follower waits",
     )
     p.add_argument(
         "--max-local-tokens",
@@ -150,6 +191,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         type=int,
         default=int(env("EDGEPROXY_LOCAL_OUTPUT_RESERVE_TOKENS", "0")),
         help="extra tokens left unused after the local safety-margin budget",
+    )
+    p.add_argument(
+        "--local-concurrency-limit",
+        type=int,
+        default=int(env("EDGEPROXY_LOCAL_CONCURRENCY_LIMIT", "8")),
+        help="fixed local capacity exposed to future planners (not enforced)",
     )
     p.add_argument(
         "--shaping",
@@ -173,8 +220,14 @@ def parse_args(argv: list[str] | None = None) -> Config:
         p.error("--local-token-margin must be greater than 0 and at most 1")
     if a.local_output_reserve_tokens < 0:
         p.error("--local-output-reserve-tokens must be non-negative")
+    if a.local_concurrency_limit <= 0:
+        p.error("--local-concurrency-limit must be positive")
     if a.cohort_window_ms < 0:
         p.error("--cohort-window-ms must be non-negative")
+    if a.cohort_barrier_timeout_ms < 0:
+        p.error("--cohort-barrier-timeout-ms must be non-negative")
+    if a.cohort_barrier_poll_ms <= 0:
+        p.error("--cohort-barrier-poll-ms must be positive")
 
     # Preset supplies the defaults; the explicit flags win where given.
     base = LinkShaper.from_preset(a.link_preset)
@@ -189,6 +242,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         trace_dir=Path(a.trace_dir),
         vllm_url=a.vllm_url,
         policy=a.policy,
+        agentic_shadow_artifact=a.agentic_shadow_artifact,
         local_model_name=a.local_model_name,
         shaping=a.shaping,
         link_preset=a.link_preset,
@@ -203,8 +257,13 @@ def parse_args(argv: list[str] | None = None) -> Config:
         episode_id=a.episode_id,
         cohort_tracking=a.cohort_tracking,
         cohort_window_ms=a.cohort_window_ms,
+        cohort_parent_placement=a.cohort_parent_placement,
+        cohort_barrier_timeout_ms=a.cohort_barrier_timeout_ms,
+        cohort_barrier_poll_ms=a.cohort_barrier_poll_ms,
         local_cache_tracking=a.local_cache_tracking,
         max_local_tokens=a.max_local_tokens,
         local_token_margin=a.local_token_margin,
         local_output_reserve_tokens=a.local_output_reserve_tokens,
+        local_concurrency_limit=a.local_concurrency_limit,
+        local_cache_salt_scope=a.local_cache_salt_scope,
     )

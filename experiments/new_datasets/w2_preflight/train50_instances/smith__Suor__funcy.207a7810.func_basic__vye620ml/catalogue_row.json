@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "funcy/seqs.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 2,
+  "image_name": "swebench/swesmith.x86_64.suor_1776_funcy.207a7810",
+  "instance_id": "Suor__funcy.207a7810.func_basic__vye620ml",
+  "mutation_locations": [
+    "funcy/seqs.py|def mapcat(f, *seqs):"
+  ],
+  "pass_to_pass_count": 201,
+  "patch_sha256": "75c82572e6aa47697e5b0dc2e1d251cf68340d49e60da8748e8bedf8f89181f6",
+  "problem_sha256": "1a35cd0c20ea0e6d0c5e24acadbb9269371f45250361628acceee64dbb5ad64d",
+  "problem_statement": "NameError: name 'zip_longest' is not defined in interleave function\n\n#### Description\n\nThe `interleave` function is broken and raises a `NameError` when called.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom funcy import interleave\n\n# This should work but raises NameError\nresult = list(interleave('ab', 'cd'))\nprint(result)  # Expected: ['a', 'c', 'b', 'd']\n```\n\n#### Error\n\n```\nNameError: name 'zip_longest' is not defined\n```\n\nThe function seems to be trying to use `zip_longest` but it's not imported anywhere in the module.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00000-of-00011.parquet",
+    "parquet_sha256": "302a383bb9229c42063ff2364b2ea637e9e7a20d82e0d566614d3aba9234833d",
+    "row_index_in_file": 3147
+  },
+  "source_repo": "swesmith/Suor__funcy.207a7810",
+  "source_split": "train",
+  "task_uid": "smith:Suor__funcy.207a7810.func_basic__vye620ml",
+  "upstream_repo": "suor/funcy",
+  "version": null
+}

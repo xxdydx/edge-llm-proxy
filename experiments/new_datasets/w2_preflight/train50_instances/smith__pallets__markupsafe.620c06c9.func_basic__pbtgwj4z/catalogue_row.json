@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/markupsafe/__init__.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 2,
+  "image_name": "swebench/swesmith.x86_64.pallets_1776_markupsafe.620c06c9",
+  "instance_id": "pallets__markupsafe.620c06c9.func_basic__pbtgwj4z",
+  "mutation_locations": [
+    "src/markupsafe/__init__.py|def soft_str(s: t.Any, /) -> str:"
+  ],
+  "pass_to_pass_count": 68,
+  "patch_sha256": "daf754632e07763a7e1c766a3d878cf98ac9b27d0afc78777fa377bff3f90ddd",
+  "problem_sha256": "15c396ff563fed23d38beacbfa298d95dc2d1c697a1ff21d8ce194ee95f9008d",
+  "problem_statement": "`soft_str` function incorrectly handles non-string inputs\n\nThe `soft_str` function is expected to convert non-string inputs to strings while leaving string inputs unchanged. However, a recent change has caused it to incorrectly handle non-string inputs, resulting in unexpected behavior.\n\nTo reproduce the issue, consider the following example:\n\n```python\nfrom markupsafe import soft_str, Markup\n\ndef test_soft_str_issue():\n    # This should return a string type\n    result1 = soft_str(15)\n    print(type(result1))\n    assert type(result1) is str, f\"Expected str, got {type(result1)}\"\n\n    # This should return a Markup type\n    result2 = soft_str(Markup())\n    print(type(result2))\n    assert type(result2) is Markup, f\"Expected Markup, got {type(result2)}\"\n```\n\nThe expected output should be:\n```\n<class 'str'>\n<class 'markupsafe.Markup'>\n```\n\nHowever, the actual output is different, indicating that the function does not convert non-string inputs to strings as expected. This issue affects the handling of various input types and needs to be addressed to ensure consistent behavior.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00006-of-00011.parquet",
+    "parquet_sha256": "8e55de0daa541c031779f17d6ef04ebc3a4e2caad708d3137edb4587d89e60f3",
+    "row_index_in_file": 2732
+  },
+  "source_repo": "swesmith/pallets__markupsafe.620c06c9",
+  "source_split": "train",
+  "task_uid": "smith:pallets__markupsafe.620c06c9.func_basic__pbtgwj4z",
+  "upstream_repo": "pallets/markupsafe",
+  "version": null
+}

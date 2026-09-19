@@ -1,0 +1,162 @@
+# Proposed collection-runner contract; not an already-built benchmark launcher.
+# Public dataset revisions and task quotas are fixed. Runtime/credentials still require local audit.
+schema_version: 1
+protocol_version: claude-code-collection-v3-task-locked
+campaign_id: REPLACE_WITH_UNIQUE_CAMPAIGN_ID
+scope: collection_and_labelling_only
+seed: 20260917
+engineering:
+  leader_label: sonnet
+  worker_label: gpt-5.6-luna
+  worker_launcher: DISCOVER_EXISTING_LUNA_LAUNCHER
+  max_parallel_workers: 4
+  experimental_task_solving_by_engineering_agents: false
+experiment:
+  harness: claude-code
+  harness_version: RESOLVE
+  proxy_commit: RESOLVE
+  edge_fingerprint_ref: RESOLVE_FROM_INSTALLED_QWEN_27B
+  cloud_fingerprint_ref: RESOLVE_FROM_CONFIGURED_DEEPSEEK_ENDPOINT
+  judge_fingerprint_ref: RESOLVE_FROM_CONFIGURED_DEEPSEEK_JUDGE
+  single_main_agent: true
+  online_learning: false
+  train_models: false
+sources:
+  real:
+    dataset_id: SWE-Gym/SWE-Gym
+    revision: bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb
+    config: default
+    split: train
+  smoke:
+    dataset_id: SWE-Gym/SWE-Gym-Lite
+    revision: f70b1a29ab120eb0a0ee7a1deb029825e735b2b0
+    config: default
+    split: train
+    membership_only_not_additional_tasks: true
+  synthetic:
+    dataset_id: SWE-bench/SWE-smith-py
+    revision: 77cab9055d42ab4a5c25c89a8f937096db13558e
+    config: default
+    split: train
+  final_reservation:
+    dataset_id: princeton-nlp/SWE-bench_Verified
+    revision: c104f840cc67f8b6eec6f759ebc8b2693d585d4a
+    run_now: false
+    config: default
+    split: test
+  public_auxiliary_trajectories:
+    enabled: false
+    dataset_id: nebius/SWE-rebench-openhands-trajectories
+counts:
+  train_tasks: 500
+  train_real_tasks: 300
+  train_synthetic_tasks: 200
+  validation_tasks: 100
+  validation_real_tasks: 60
+  validation_synthetic_tasks: 40
+  final_reserved_tasks: 100
+  original_policies:
+  - edge-only-v1
+  - cloud-only-v1
+  original_attempts_per_policy: 1
+  core_prefixes_per_original: 5
+  max_core_preference_pairs: 6000
+  judge_orientations: 2
+  branch_task_target: 100
+  branch_checkpoint_target: 200
+  checkpoint_origins:
+  - edge-only-v1
+  - cloud-only-v1
+  retained_checkpoints_per_selected_original: 1
+  random_branch_repeat_fraction: 0.1
+  controlled_serving_foreground_invocations: 40
+limits:
+  max_main_logical_calls_per_original: 40
+  max_active_task_seconds_per_original: 1200
+  max_additional_transport_retries: 2
+  max_additional_judge_parse_attempts: 2
+  output_token_caps: RESOLVE_FROM_FROZEN_BACKEND_CONFIGS
+  tool_timeout_seconds: RESOLVE_AND_PIN
+  grader_timeout_seconds: RESOLVE_AND_PIN
+  outer_job_wall_timeout_seconds: RESOLVE_AND_PIN
+  min_free_disk_gb: RESOLVE_AND_PIN
+  local_generation_concurrency: 1
+  task_container_concurrency: RESOLVE_FROM_RESOURCES
+  cloud_generation_concurrency: RESOLVE_FROM_RATE_LIMITS
+  judge_concurrency: RESOLVE_FROM_RATE_LIMITS
+  approved_campaign_spend_usd: null
+  paid_resource_provisioning_allowed: false
+  production_approval_required_if_no_existing_authority: true
+  max_reserve_task_attempts: 1200
+  max_campaign_transport_attempts: RESOLVE_AND_PIN
+  task_preflight_warm_grading_limit_seconds: 120
+sampling:
+  core_prefix_method: uniform_without_replacement
+  branch_checkpoint_method: online_reservoir_one
+  selection_uses_terminal_outcome: false
+  selection_uses_judge_label: false
+  keep_both_pass_and_both_fail: true
+  duplicate_group_split_unit: true
+  desired_upstream_repositories: 32
+  desired_max_training_repo_fraction: 0.1
+  desired_training_repositories: 28
+  task_selection_source: TASK_SOURCE_LOCK.json
+branch:
+  intervention: next_main_call_only
+  continuation_policy: edge-only-v1
+  candidate_protocol: fresh_one_per_backend_per_repeat
+  same_remaining_budget: true
+  require_restoration_certificate: true
+  randomise_branch_execution_order: true
+  allow_approximate_restore_as_exact: false
+  execute_tools_with: claude-code
+preference:
+  enabled: true
+  reuse_matching_original_candidate: true
+  execute_shadow_candidate: false
+  candidate_view: visible_text_and_tool_actions
+  include_candidate_private_reasoning: false
+  preserve_full_raw_request: true
+  full_context_judge_default: true
+  silent_truncation: false
+  independent_audit_random_pairs: 50
+  independent_audit_enriched_pairs: 50
+  retry_semantic_disagreement: false
+telemetry:
+  capture_every_experimental_invocation: true
+  preserve_raw_provider_usage: true
+  missing_values: null
+  separate_pre_dispatch_and_observed_fields: true
+  record_snapshot_age: true
+  research_overhead_separate: true
+  dedicated_server_for_cache_reset: true
+stages:
+  cumulative_training_tasks:
+  - 2
+  - 50
+  - 200
+  - 500
+  cumulative_branch_pairs:
+  - 2
+  - 12
+  - 100
+  - 200
+  validation_after_training_collection: true
+  pause_on_integrity_failure: true
+  stop_when_outcomes_unfavourable: false
+task_manifest:
+  source_lock: TASK_SOURCE_LOCK.json
+  script: harvest_task_manifest.py
+  plan_version: claude-code-native-task-plan-v3
+  selection_by_llm: false
+  literal_ids_generated_before_collection: true
+  runtime_preflight_required: true
+  freeze_stages:
+  - smoke
+  - train50
+  - train200
+  - train500
+  - all600
+  max_preflight_candidates_per_slot: 3
+  preserve_earlier_frozen_assignments: true
+  exposure_inventory: prior_exposed_instance_ids.txt

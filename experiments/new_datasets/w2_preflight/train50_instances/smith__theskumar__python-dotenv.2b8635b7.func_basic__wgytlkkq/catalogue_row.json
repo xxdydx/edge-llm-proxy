@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/dotenv/parser.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 3,
+  "image_name": "swebench/swesmith.x86_64.theskumar_1776_python-dotenv.2b8635b7",
+  "instance_id": "theskumar__python-dotenv.2b8635b7.func_basic__wgytlkkq",
+  "mutation_locations": [
+    "src/dotenv/parser.py|class Reader:"
+  ],
+  "pass_to_pass_count": 118,
+  "patch_sha256": "5cf89adfd7f0727b49d23d91f6668c108a7f242a156d7c0f157e93e41ecf9565",
+  "problem_sha256": "9c5956cec55544bcfd674e45bb86ccd92f9942483bced06b0b15ab5c782e40e7",
+  "problem_statement": "Escaped characters in .env files don't work properly\n\nDescription\n\nWhen using escaped characters in .env files, they are not being properly decoded. This affects several common use cases like escaped quotes and newlines.\n\nFor example, when I have a .env file with the following content:\n```\na=\"b\\\\nc\"\na=\"b\\\"c\"\na='b\\'c'\n```\n\nThe values are not properly decoded. When trying to access these values, I get an IndexError.\n\nReproduction:\n\n```python\nfrom dotenv import load_dotenv\n\n# Create a .env file with:\n# a=\"b\\\\nc\"\n# a=\"b\\\"c\"\n# a='b\\'c'\n\nload_dotenv()\n# Accessing these values will cause an error\n```\n\nThis is particularly problematic when working with values that need to contain quotes or special characters. The parser seems to be incorrectly handling the escape sequences in the strings.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00009-of-00011.parquet",
+    "parquet_sha256": "20923272dab2706c1e07e9e11a19373c5c642efbb594a3b1c104440cf8cfc132",
+    "row_index_in_file": 83
+  },
+  "source_repo": "swesmith/theskumar__python-dotenv.2b8635b7",
+  "source_split": "train",
+  "task_uid": "smith:theskumar__python-dotenv.2b8635b7.func_basic__wgytlkkq",
+  "upstream_repo": "theskumar/python-dotenv",
+  "version": null
+}

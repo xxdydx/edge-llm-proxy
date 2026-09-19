@@ -1,0 +1,33 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "jsonschema/_legacy_keywords.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 739,
+  "image_name": "swebench/swesmith.x86_64.python-jsonschema_1776_jsonschema.93e0caa5",
+  "instance_id": "python-jsonschema__jsonschema.93e0caa5.combine_file__pmp435a8",
+  "mutation_locations": [
+    "jsonschema/_legacy_keywords.py|def additionalItems(validator, aI, instance, schema):",
+    "jsonschema/_legacy_keywords.py|def contains_draft6_draft7(validator, contains, instance, schema):"
+  ],
+  "pass_to_pass_count": 6491,
+  "patch_sha256": "acac4a9e13d6c8b84e3626bc2558849c0fb79d3809c5886dac21593258854a25",
+  "problem_sha256": "1bf9c907d23a98f3fb107eea944faf53807de2bfea3b738773549349dfe08ea3",
+  "problem_statement": "Multiple issues with JSON Schema validation in legacy keywords\n\nDescription\n\nI've found several issues with the implementation of legacy keywords in the JSON Schema validator. The problems affect multiple validation keywords and cause incorrect validation results.\n\nHere are the specific issues I've identified:\n\n1. The `additionalItems` validator has incorrect indexing. When enumerating items, it starts at `len_items - 1` instead of `len_items`, which causes it to validate the wrong items. Additionally, the error message says \"might be allowed\" instead of definitively stating they are not allowed.\n\n2. The `items_draft6_draft7_draft201909` validator has type checking issues. It's checking if the instance is an \"object\" instead of an \"array\", and similarly checking if items is an \"object\" instead of an \"array\". The path indexing is also off by 1 in multiple places.\n\n3. The `contains_draft6_draft7` validator has a logical error. It's using `all()` instead of `any()` when checking if elements match the contains schema, which completely inverts the validation logic.\n\n4. The `recursiveRef` validator is not resolving references correctly. It's using the schema itself instead of the resolved contents.\n\nTo reproduce the issue, try validating the following JSON against a schema with any of these keywords:\n\n```python\n# Example for additionalItems issue\nschema = {\n    \"items\": [{\"type\": \"string\"}, {\"type\": \"number\"}],\n    \"additionalItems\": False\n}\ninstance = [\"foo\", 42, \"bar\"]  # Should be invalid but might validate\n\n# Example for contains issue\nschema = {\n    \"contains\": {\"type\": \"number\"}\n}\ninstance = [\"foo\", \"bar\", \"baz\"]  # Should be invalid (no numbers) but might validate\n\n# Example for items issue\nschema = {\n    \"items\": [{\"type\": \"string\"}, {\"type\": \"number\"}]\n}\ninstance = [\"foo\", 42, \"bar\"]  # Will validate incorrectly\n```\n\nThese issues cause many test failures in the test suite and would lead to incorrect validation results in production.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 3972
+  },
+  "source_repo": "swesmith/python-jsonschema__jsonschema.93e0caa5",
+  "source_split": "train",
+  "task_uid": "smith:python-jsonschema__jsonschema.93e0caa5.combine_file__pmp435a8",
+  "upstream_repo": "python-jsonschema/jsonschema",
+  "version": null
+}

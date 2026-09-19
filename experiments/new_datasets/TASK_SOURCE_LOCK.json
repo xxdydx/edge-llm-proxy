@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "plan_version": "claude-code-native-task-plan-v3",
+  "seed": "20260917",
+  "sources": {
+    "gym": {"dataset_id":"SWE-Gym/SWE-Gym","revision":"bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb","config":"default","split":"train","files":["data/train-00000-of-00001.parquet"],"published_rows":2438},
+    "lite": {"dataset_id":"SWE-Gym/SWE-Gym-Lite","revision":"f70b1a29ab120eb0a0ee7a1deb029825e735b2b0","config":"default","split":"train","files":["data/train-00000-of-00001.parquet"],"published_rows":230},
+    "smith": {"dataset_id":"SWE-bench/SWE-smith-py","revision":"77cab9055d42ab4a5c25c89a8f937096db13558e","config":"default","split":"train","files":["data/train-00000-of-00011.parquet","data/train-00001-of-00011.parquet","data/train-00002-of-00011.parquet","data/train-00003-of-00011.parquet","data/train-00004-of-00011.parquet","data/train-00005-of-00011.parquet","data/train-00006-of-00011.parquet","data/train-00007-of-00011.parquet","data/train-00008-of-00011.parquet","data/train-00009-of-00011.parquet","data/train-00010-of-00011.parquet"],"published_rows":50908},
+    "verified": {"dataset_id":"princeton-nlp/SWE-bench_Verified","revision":"c104f840cc67f8b6eec6f759ebc8b2693d585d4a","config":"default","split":"test","files":["data/test-00000-of-00001.parquet"],"published_rows":500}
+  },
+  "real_quotas": [
+    {"repo":"getmoto/moto","train":50,"validation":10},
+    {"repo":"python/mypy","train":50,"validation":10},
+    {"repo":"pydantic/pydantic","train":40,"validation":8},
+    {"repo":"facebookresearch/hydra","train":30,"validation":6},
+    {"repo":"iterative/dvc","train":40,"validation":8},
+    {"repo":"conan-io/conan","train":30,"validation":6},
+    {"repo":"pandas-dev/pandas","train":40,"validation":8},
+    {"repo":"dask/dask","train":20,"validation":4}
+  ],
+  "synthetic_train_repos": [
+    "pallets/click","pallets/jinja","pallets/markupsafe",
+    "marshmallow-code/marshmallow","marshmallow-code/apispec",
+    "python-jsonschema/jsonschema","oauthlib/oauthlib","mahmoud/boltons",
+    "mewwts/addict","arrow-py/arrow","spulec/freezegun","suor/funcy",
+    "gruns/furl","python-hyper/h11","theskumar/python-dotenv","pycqa/flake8",
+    "davidhalter/parso","erikrose/parsimonious","r1chardj0n3s/parse","lepture/mistune"
+  ],
+  "synthetic_train_per_repo":10,
+  "synthetic_validation_repos":["mozilla/bleach","seperman/deepdiff","cloudpipe/cloudpickle","cookiecutter/cookiecutter"],
+  "synthetic_validation_per_repo":10,
+  "smoke_instance_ids":["getmoto__moto-5752","getmoto__moto-6178"],
+  "final_reserved_tasks":100,
+  "selection": {
+    "prefer_lite_members_for_real":true,
+    "rank_within_tier":"sha256(seed|task-order|source_key|instance_id)",
+    "minimum_problem_characters":40,
+    "require_nonempty_fail_to_pass":true,
+    "require_nonempty_pass_to_pass":false,
+    "synthetic_require_nonempty_pass_to_pass":true,
+    "synthetic_max_changed_files":3,
+    "synthetic_require_python_only_changes":true,
+    "synthetic_reject_test_or_build_file_mutations":true,
+    "preflight_warm_grade_seconds":120,
+    "max_preflight_candidates_per_slot":3,
+    "replacement_must_match_source_repo_split":true,
+    "use_model_outcomes":false,
+    "use_judge_labels":false
+  },
+  "branch_task_slots":{"train":80,"validation":20,"real_fraction":0.6,"origins":["edge-only-v1","cloud-only-v1"]},
+  "known_limitations":["Source revisions and smoke IDs were verified on the public sites; full parquet download was unavailable in the preparation container.","Complete ID manifests are materialised by the included deterministic script on a network-enabled machine.","Repository profiles support this allowlist, but eligible per-repository task yield and actual runtime must be verified by the script and preflight.","Selections are provisional until environment preflight; runtime eligibility is not a model-success label."]
+}

@@ -1,0 +1,37 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/mistune/plugins/def_list.py",
+    "src/mistune/plugins/ruby.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 40,
+  "image_name": "swebench/swesmith.x86_64.lepture_1776_mistune.bf54ef67",
+  "instance_id": "lepture__mistune.bf54ef67.combine_module__j8t1bfl1",
+  "mutation_locations": [
+    "src/mistune/plugins/def_list.py|HAS_BLANK_LINE_RE = re.compile(r'\\n[ \\t]*\\n$')",
+    "src/mistune/plugins/def_list.py|def _process_text(block: \"BlockParser\", text: str, loose: bool) -> List[Any]:",
+    "src/mistune/plugins/ruby.py|def _parse_ruby_link(",
+    "src/mistune/plugins/ruby.py|def parse_ruby(inline: \"InlineParser\", m: Match[str], state: \"InlineState\") -> i",
+    "src/mistune/plugins/ruby.py|def ruby(md: \"Markdown\") -> None:"
+  ],
+  "pass_to_pass_count": 905,
+  "patch_sha256": "ccf64a9883919df6335252238ff642bd0ccf61797f307c1c6d65f52e0aca9cc2",
+  "problem_sha256": "6b612d815f685652fb7041f597d7a8ca8887471f4665f26012cf85e7ea7d7706",
+  "problem_statement": "Definition list and ruby plugins broken after recent changes\n\n#### Description\n\nThe definition list and ruby plugins are not working correctly. When trying to parse markdown with definition lists or ruby annotations, the output is malformed or completely broken.\n\n#### Steps/Code to Reproduce\n\n```python\nimport mistune\nfrom mistune.plugins import def_list, ruby\n\n# Test definition list\nmd = mistune.create_markdown(plugins=['def_list'])\ndef_list_text = \"\"\"Apple\n:   Pomaceous fruit of plants of the genus Malus in \n    the family Rosaceae.\n\nOrange\n:   The fruit of an evergreen tree of the genus Citrus.\"\"\"\n\nresult = md(def_list_text)\nprint(\"Definition list result:\")\nprint(result)\n\n# Test ruby annotations\nmd_ruby = mistune.create_markdown(plugins=['ruby'])\nruby_text = \"This is {ruby base}(ruby text) annotation.\"\n\nresult_ruby = md_ruby(ruby_text)\nprint(\"\\nRuby result:\")\nprint(result_ruby)\n```\n\nThe definition lists are not being rendered as proper `<dl>` elements and ruby annotations are producing incorrect HTML structure. The ruby text and base text appear to be swapped in the output.\n\n#### Expected Behavior\n\nDefinition lists should render as proper HTML definition lists with `<dl>`, `<dt>`, and `<dd>` tags. Ruby annotations should render with the base text in `<rb>` tags and the annotation text in `<rt>` tags.\n\n#### Actual Behavior\n\nThe plugins produce malformed HTML or fail to parse the markdown syntax correctly.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00002-of-00011.parquet",
+    "parquet_sha256": "67512898124c03132ae5bbf78866610571a565724dcb6a2064009db8a6825613",
+    "row_index_in_file": 2661
+  },
+  "source_repo": "swesmith/lepture__mistune.bf54ef67",
+  "source_split": "train",
+  "task_uid": "smith:lepture__mistune.bf54ef67.combine_module__j8t1bfl1",
+  "upstream_repo": "lepture/mistune",
+  "version": null
+}

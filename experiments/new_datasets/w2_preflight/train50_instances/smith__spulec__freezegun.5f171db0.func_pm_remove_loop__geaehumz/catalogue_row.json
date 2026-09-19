@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "freezegun/api.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 27,
+  "image_name": "swebench/swesmith.x86_64.spulec_1776_freezegun.5f171db0",
+  "instance_id": "spulec__freezegun.5f171db0.func_pm_remove_loop__geaehumz",
+  "mutation_locations": [
+    "freezegun/api.py|class _freeze_time:"
+  ],
+  "pass_to_pass_count": 107,
+  "patch_sha256": "ac219d02e9287f601b57b644f862ff7aafa5dcf1abab0929cdd57a7e7f80d361",
+  "problem_sha256": "2a0b882e1b9aaa152773247b82c1a0f3ee4753b00462528c9bf7170b9eb3b325",
+  "problem_statement": "Module attribute patching not working after freeze_time start\n\n#### Description\n\nWhen using freeze_time, modules imported after starting the freeze are not getting their time-related attributes properly patched with fake implementations. This causes datetime, time, and other time-related functions to return real time values instead of the frozen time.\n\n#### Steps/Code to Reproduce\n\n```python\nimport sys\nimport datetime\nfrom freezegun import freeze_time\n\n# Make sure module isn't already imported\nif 'some_module' in sys.modules:\n    del sys.modules['some_module']\n\nwith freeze_time('2012-01-14'):\n    # Import module after freeze_time has started\n    import some_module_with_datetime_usage\n    \n    # These should return frozen time but return real time instead\n    print(some_module_with_datetime_usage.get_current_time())  # Returns real time\n    print(datetime.datetime.now())  # Returns frozen time (works correctly)\n```\n\nThe issue appears when modules are imported after `freeze_time` has already started. The time-related attributes in these newly imported modules are not being replaced with their fake counterparts, causing them to use real time functions instead of the frozen time implementations.\n\nThis affects various time-related functions including `datetime.datetime`, `time.time`, `time.localtime`, `time.gmtime`, and `time.strftime` when accessed through module attributes that were imported after the freeze began.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 3142
+  },
+  "source_repo": "swesmith/spulec__freezegun.5f171db0",
+  "source_split": "train",
+  "task_uid": "smith:spulec__freezegun.5f171db0.func_pm_remove_loop__geaehumz",
+  "upstream_repo": "spulec/freezegun",
+  "version": null
+}

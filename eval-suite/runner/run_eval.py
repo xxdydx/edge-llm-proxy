@@ -50,7 +50,55 @@ sys.path.insert(0, str(RUNNER_DIR))
 from stats import binomial_rate_ci  # noqa: E402
 from task_spec import TaskSpec, discover_tasks, select_tasks  # noqa: E402
 
-CONDITION_POLICY = {"cloud": "cloud-only", "routing": "static"}
+CONDITION_POLICY = {
+    "cloud": "cloud-only",
+    # Baseline for the spec's three-way "cloud-only vs. local-only vs.
+    # routed" comparison (edge-llm-client.md's success standard). Forces
+    # every call local regardless of feasibility — tool-calling turns that
+    # would normally hard-gate to cloud are expected to degrade or fail;
+    # that's the point of the baseline, not a bug in it.
+    "local": "local-only",
+    "routing": "static",
+    # A/B arm for the local-first cold-branch preference gate — see
+    # edgeproxy.router.WarmLocalPolicy and its linked wiki decision note.
+    "routing-warm": "warm-local",
+    # Rung 3: WarmLocalPolicy's cold-branch gate plus a data-tuned headroom-
+    # pressure escalation — see edgeproxy.router.BranchDriftPolicy.
+    "routing-drift": "branch-drift",
+    # Quality A/B: WarmLocalPolicy plus cloud placement for the trace-grounded
+    # first three exploration/planning turns of each tool loop.
+    "routing-plan": "planning-escalation",
+    # Request-only local truncation-risk model, validated on held-out task
+    # instances by scripts/analyze_call_risk.py.
+    "routing-risk": "predicted-risk",
+    # Stage 2 learned agentic-routing scaffold. With no scorer configured, the
+    # policy safely routes feasible calls cloud.
+    "routing-learned-agentic": "learned-agentic",
+    # Dependency-free, conservative Stage 2 baseline with a real scorer wired
+    # in; unlike the scaffold above, feasible high-confidence calls can route.
+    "routing-learned-agentic-heuristic": "learned-agentic-heuristic",
+    # Rung 4 benchmark-only parent-placement experiment. The underlying
+    # single-call policy remains static; the explicit flag enables the
+    # adjacent server-side override only for this named condition.
+    "routing-cohort": "static",
+    # Policy 6: composes branch-drift, planning-escalation, and
+    # predicted-risk on top of warm-local's cold-branch gate — see
+    # edgeproxy.router.CombinedPolicy.
+    "routing-all": "all-improvements",
+    # Policy 6 with the Rung 4 cohort parent-placement override enabled, so a
+    # matched-matrix campaign can report cohort-off vs cohort-on for Policy 6
+    # as two distinct cells without conflating cohort with the five
+    # single-call policies. On single-instance SWE-bench Pro bug-fix tasks the
+    # cohort coordinator rarely has a real Agent fan-out wave to coordinate,
+    # so this is expected to differ little from "routing-all" here; the point
+    # is a clean, separately-labelled cell.
+    "routing-all-cohort": "all-improvements",
+}
+
+CONDITION_PROXY_FLAGS = {
+    "routing-cohort": ["--cohort-parent-placement"],
+    "routing-all-cohort": ["--cohort-parent-placement"],
+}
 
 
 def die(message: str) -> None:
@@ -145,6 +193,7 @@ class RunContext:
     experiment_id: str
     run_stamp: str
     claude_timeout_extra_s: int = 30
+    agentic_shadow_artifact: Path | None = None
 
 
 @dataclass
@@ -192,7 +241,7 @@ class JobResult:
 
 def build_proxy_cmd(ctx: RunContext, condition: str, port: int, trace_dir: Path, episode_id: str) -> list[str]:
     policy = CONDITION_POLICY[condition]
-    return [
+    cmd = [
         ctx.python_bin,
         "-m",
         "edgeproxy.server",
@@ -227,6 +276,11 @@ def build_proxy_cmd(ctx: RunContext, condition: str, port: int, trace_dir: Path,
         "--shaping",
         "none",
     ]
+    cmd.extend(CONDITION_PROXY_FLAGS.get(condition, ()))
+    artifact = getattr(ctx, "agentic_shadow_artifact", None)
+    if artifact is not None:
+        cmd.extend(["--agentic-shadow-artifact", str(artifact)])
+    return cmd
 
 
 def start_proxy(ctx: RunContext, job: Job, port: int, trace_dir: Path, log_path: Path):
@@ -487,8 +541,17 @@ def run_campaign(ctx: RunContext, jobs: list[Job], cloud_parallelism: int, local
             status = "PASS" if result.passed else "FAIL"
             print(f"[{done}/{total}] {status}  {result.job_id}  ({result.wall_time_s}s)  {result.reason[:120]}")
 
+    # Any local-backed condition (currently "routing", "routing-warm") goes to
+    # the local pool; only "cloud" goes to the cloud pool. A hardcoded
+    # `== "routing"` here silently dropped every other local condition with
+    # no error — see eval-suite/swebench/runner/run_swebench.py's identical,
+    # already-fixed bug (claude-memory/wiki/problems/run_swebench.py silently
+    # dropped jobs for any non-routing local condition.md) and
+    # [[Implement Rung 1 as a detect-only circuit breaker not buffered
+    # escalation]], whose first live validation attempt hit this exact bug
+    # (unfixed here) as "0/0 jobs passed" with no error.
     cloud_jobs = [j for j in jobs if j.condition == "cloud"]
-    routing_jobs = [j for j in jobs if j.condition == "routing"]
+    routing_jobs = [j for j in jobs if j.condition != "cloud"]
 
     with ThreadPoolExecutor(max_workers=max(cloud_parallelism, 1)) as cloud_pool, \
          ThreadPoolExecutor(max_workers=max(local_parallelism, 1)) as local_pool:
@@ -558,8 +621,14 @@ def write_summary(ctx: RunContext, results: list[JobResult], rows: list[dict[str
         "| task | condition | n | pass rate | 95% CI | mean score | mean wall time (s) |",
         "|---|---|---:|---:|---|---:|---:|",
     ]
+    # Derive the condition list from the actual results rather than a fixed
+    # ("cloud", "routing") tuple — the same silent-drop bug as run_campaign's
+    # old job filter, just in the report instead of the dispatch: a
+    # `routing-warm` job would run and land in summary.json but never appear
+    # in this table.
+    all_conditions = sorted({row["condition"] for row in rows})
     for task_id in sorted(by_task):
-        for condition in ("cloud", "routing"):
+        for condition in all_conditions:
             row = by_task[task_id].get(condition)
             if not row:
                 continue
@@ -577,7 +646,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo-dir", type=Path, default=EVAL_SUITE_DIR.parent)
     parser.add_argument("--tasks", default="all", help="'all' or a comma-separated list of task ids")
-    parser.add_argument("--conditions", default="cloud,routing", help="comma-separated: cloud,routing")
+    parser.add_argument(
+        "--conditions",
+        default="cloud,routing",
+        help=f"comma-separated, one or more of: {', '.join(CONDITION_POLICY)}",
+    )
     parser.add_argument("--seeds", type=int, default=3)
     parser.add_argument("--cloud-parallelism", type=int, default=4)
     parser.add_argument("--local-parallelism", type=int, default=1, help="keep at 1 unless deliberately studying GPU concurrency")
@@ -586,9 +659,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", "sonnet"))
     parser.add_argument("--vllm-url", default=os.environ.get("EDGEPROXY_VLLM_URL", "http://127.0.0.1:8001"))
     parser.add_argument("--upstream", default=os.environ.get("EDGEPROXY_UPSTREAM", "https://lum.id/claude"))
-    parser.add_argument("--max-local-tokens", type=int, default=int(os.environ.get("EDGEPROXY_MAX_LOCAL_TOKENS", "100000")))
+    # Match edgeproxy/bootstrap's safe 7B default. Higher-capacity setup
+    # profiles explicitly export EDGEPROXY_MAX_LOCAL_TOKENS.
+    parser.add_argument("--max-local-tokens", type=int, default=int(os.environ.get("EDGEPROXY_MAX_LOCAL_TOKENS", "60000")))
     parser.add_argument("--local-token-margin", type=float, default=float(os.environ.get("EDGEPROXY_LOCAL_TOKEN_MARGIN", "0.90")))
     parser.add_argument("--experiment-id", default=None)
+    parser.add_argument("--agentic-shadow-artifact", type=Path, default=None,
+                        help="observe-only agentic quality model artifact; does not change placement")
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument(
         "--suite-name",
@@ -622,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
     conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
     for c in conditions:
         if c not in CONDITION_POLICY:
-            die(f"unknown condition: {c} (expected cloud and/or routing)")
+            die(f"unknown condition: {c} (expected: {', '.join(CONDITION_POLICY)})")
 
     tasks_root = EVAL_SUITE_DIR / "tasks"
     all_tasks = discover_tasks(tasks_root)
@@ -655,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         local_token_margin=args.local_token_margin,
         experiment_id=experiment_id,
         run_stamp=run_stamp,
+        agentic_shadow_artifact=args.agentic_shadow_artifact,
     )
 
     jobs = build_jobs(tasks, conditions, args.seeds)

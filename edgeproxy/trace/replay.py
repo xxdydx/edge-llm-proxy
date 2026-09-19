@@ -67,6 +67,13 @@ def features_for(
             for key, value in record["features"].items()
             if key in allowed
         }
+        # The ordinal is deterministically recoverable from old requests, so
+        # recorded-feature replay need not collapse every historical call to
+        # the dataclass's unknown/default path.
+        payload.setdefault(
+            "branch_turn_ordinal",
+            router.extract_features(record["request"], gap).branch_turn_ordinal,
+        )
         return router.CallFeatures(**payload)
     return router.extract_features(record["request"], gap)
 

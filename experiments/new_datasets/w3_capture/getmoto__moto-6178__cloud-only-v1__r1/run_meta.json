@@ -1,0 +1,14 @@
+{
+ "instance_id": "getmoto__moto-6178",
+ "policy": "cloud-only-v1",
+ "run_dir": "getmoto__moto-6178__cloud-only-v1__r1",
+ "repeat_index": 1,
+ "session_id": "c4099389-4bb3-4225-bde1-54118aae52c6",
+ "container_setup_seconds": 4.87,
+ "claude_wall_seconds": 0.57,
+ "claude_returncode": 1,
+ "claude_timed_out": false,
+ "patch_nonempty": false,
+ "patch_bytes": 0,
+ "timestamp_utc": "2026-09-19T04:05:27.658086+00:00"
+}

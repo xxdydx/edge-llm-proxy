@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "freezegun/api.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 2,
+  "image_name": "swebench/swesmith.x86_64.spulec_1776_freezegun.5f171db0",
+  "instance_id": "spulec__freezegun.5f171db0.pr_533",
+  "mutation_locations": [
+    "freezegun/api.py|class TickingDateTimeFactory:"
+  ],
+  "pass_to_pass_count": 132,
+  "patch_sha256": "df83ea71561fb4a076efd63f1c969af7147270ba76f5f6210d1734d7551b1fe8",
+  "problem_sha256": "2e82ee23e7126e3c3dfb24254cd2d7ef0ac0de6506b255156391400b24d726ef",
+  "problem_statement": "# Missing `tick` and `move_to` methods in `TickingDateTimeFactory` class\n\nWhen using freezegun with `tick=True`, the `tick()` and `move_to()` methods are not available, causing AttributeError exceptions when trying to use them.\n\n## Description\n\nI'm trying to use the ticking functionality of freezegun to manipulate time in my tests. When I create a frozen time with `tick=True` and try to use the `tick()` or `move_to()` methods, I get an AttributeError.\n\n## Steps to reproduce\n\n```python\nimport datetime\nimport time\nfrom freezegun import freeze_time\n\n# Create a frozen time with tick=True\nwith freeze_time('Jan 14th, 2012, 23:59:59', tick=True) as ft:\n    # Try to use the tick method\n    ft.tick(61)  # This raises AttributeError\n    \n    # Or try to use the move_to method\n    ft.move_to('Jan 15th, 2012, 00:59:59')  # This also raises AttributeError\n```\n\n## Expected behavior\n\nThe `tick()` and `move_to()` methods should be available when using freezegun with `tick=True`, allowing me to manually adjust the frozen time while still having it tick forward automatically.\n\n## Actual behavior\n\n```\nAttributeError: 'TickingDateTimeFactory' object has no attribute 'tick'\n```\n\nor \n\n```\nAttributeError: 'TickingDateTimeFactory' object has no attribute 'move_to'\n```\n\nIt seems like these methods are defined for other factory classes but not for the `TickingDateTimeFactory` class.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 3161
+  },
+  "source_repo": "swesmith/spulec__freezegun.5f171db0",
+  "source_split": "train",
+  "task_uid": "smith:spulec__freezegun.5f171db0.pr_533",
+  "upstream_repo": "spulec/freezegun",
+  "version": null
+}

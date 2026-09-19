@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "furl/furl.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 32,
+  "image_name": "swebench/swesmith.x86_64.gruns_1776_furl.da386f68",
+  "instance_id": "gruns__furl.da386f68.func_pm_ctrl_shuffle__ab8bqg4b",
+  "mutation_locations": [
+    "furl/furl.py|def get_scheme(url):"
+  ],
+  "pass_to_pass_count": 45,
+  "patch_sha256": "86e609398abd6ec04af9d06671f57a0adbccbedec22deabadf02ebfa97967d31",
+  "problem_sha256": "8a6240974e048f389054705392bd11581b4e3a66de0834cb949d3aca8c473ba2",
+  "problem_statement": "strip_scheme function raises UnboundLocalError when processing URLs\n\n#### Description\n\nThe `strip_scheme()` function in furl.py is raising an `UnboundLocalError` when trying to process URLs. The error occurs because a local variable `scheme` is being referenced before assignment.\n\n#### Steps/Code to Reproduce\n\n```python\nimport furl\n\n# This will raise UnboundLocalError\nf = furl.furl('http://www.example.com/')\nprint(f.url)\n```\n\nThe error also occurs with various URL manipulations:\n\n```python\nimport furl\n\nf = furl.furl('http://www.pumps.com/')\nf.args.setdefault('foo', 'blah')  # UnboundLocalError\n```\n\n#### Expected Behavior\n\nThe URL should be parsed and manipulated correctly without raising an UnboundLocalError.\n\n#### Actual Behavior\n\n```\nUnboundLocalError: local variable 'scheme' referenced before assignment\n```\n\nThis affects basic URL creation and manipulation operations throughout the furl library.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00004-of-00011.parquet",
+    "parquet_sha256": "6110c76e568c0ee03eb1c86d208887154c6406237f532436cf72ed2c265073ca",
+    "row_index_in_file": 1349
+  },
+  "source_repo": "swesmith/gruns__furl.da386f68",
+  "source_split": "train",
+  "task_uid": "smith:gruns__furl.da386f68.func_pm_ctrl_shuffle__ab8bqg4b",
+  "upstream_repo": "gruns/furl",
+  "version": null
+}

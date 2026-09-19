@@ -1,0 +1,12 @@
+[
+ {
+  "instance_id": "getmoto__moto-5752",
+  "model_patch": "",
+  "model_name_or_path": "preflight-baseline-noop"
+ },
+ {
+  "instance_id": "getmoto__moto-6178",
+  "model_patch": "",
+  "model_name_or_path": "preflight-baseline-noop"
+ }
+]

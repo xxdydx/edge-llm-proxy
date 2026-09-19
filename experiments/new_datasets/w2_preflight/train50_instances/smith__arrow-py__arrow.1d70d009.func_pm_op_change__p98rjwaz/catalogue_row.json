@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "arrow/formatter.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.arrow-py_1776_arrow.1d70d009",
+  "instance_id": "arrow-py__arrow.1d70d009.func_pm_op_change__p98rjwaz",
+  "mutation_locations": [
+    "arrow/formatter.py|class DateTimeFormatter:"
+  ],
+  "pass_to_pass_count": 1851,
+  "patch_sha256": "2a804bfea3abd710b87ca3b486d912d69ba8e85f5a10af161bcea76fd7747592",
+  "problem_sha256": "e969a42182d87e01900b5814c9e7308f46a9ff39e198d3bec33c959018e57074",
+  "problem_statement": "SSSS token formatting produces float instead of integer\n\n#### Description\n\nWhen formatting datetime with the SSSS token for sub-second precision, the formatter produces a float value instead of an integer, causing a formatting error.\n\n#### Steps/Code to Reproduce\n\n```python\nimport arrow\nfrom datetime import datetime\n\n# Create a datetime with microseconds\ndt = datetime(2013, 1, 1, 0, 0, 0, 123456)\n\n# Try to format with SSSS token\nformatter = arrow.formatter.DateTimeFormatter()\nresult = formatter._format_token(dt, 'SSSS')\nprint(result)\n```\n\nThis raises:\n```\nValueError: Unknown format code 'd' for object of type 'float'\n```\n\nThe SSSS token should format microseconds divided by 100 as a 4-digit zero-padded integer (e.g., \"1234\" for 123456 microseconds), but instead it's trying to format a float value.\n\nOther sub-second tokens like SSS, SSSSS, and SSSSSS work correctly and produce the expected integer formatting.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00005-of-00011.parquet",
+    "parquet_sha256": "517420b48132eda3c073e6b9bc5fecbaf34c3dea7f3fec49a46f8615584f8200",
+    "row_index_in_file": 3857
+  },
+  "source_repo": "swesmith/arrow-py__arrow.1d70d009",
+  "source_split": "train",
+  "task_uid": "smith:arrow-py__arrow.1d70d009.func_pm_op_change__p98rjwaz",
+  "upstream_repo": "arrow-py/arrow",
+  "version": null
+}

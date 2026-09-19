@@ -3,7 +3,9 @@ kind: SSHTask
 metadata:
   name: arul-edge-client-qwen38-27b
   annotations:
-    description: Qwen3.8-27B NVFP4 edge LLM experiment; set gpu.type per run
+    description: Qwen3.8-27B NVFP4 edge LLM experiment
+    schedule_hint:
+      selected_worker: wkr-4
 
 spec:
   taskType: ssh
@@ -19,6 +21,9 @@ spec:
         count: 1
       cpu: 12
       memory: 96Gi
+  # Platform hard-caps the actual lease at 8h regardless of what's requested
+  # here (confirmed 2026-09-06 — a 43200s/12h request was torn down at
+  # exactly 28800s/8h). Set to the real ceiling so this isn't misleading.
   ttlSeconds: 28800
   accessMode: forward
   output:

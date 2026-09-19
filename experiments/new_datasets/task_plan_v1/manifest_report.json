@@ -1,0 +1,247 @@
+{
+  "plan_version": "claude-code-native-task-plan-v3",
+  "spec_sha256": "20d28d1dd335a3ba28264d88461740ce6d22d74bdb3aae0cb78c8c5193f00cdf",
+  "catalogue_sha256": "93f931cbb242cc8fb03c38c4fd1bad4f7d5225871b2b2c21c53c1c05494b2d16",
+  "state": "BLOCKED_SHORTFALL",
+  "train": 494,
+  "validation": 100,
+  "final_reserved": 100,
+  "train_repositories": 28,
+  "validation_repositories": 12,
+  "branch_task_slots": 100,
+  "reserves": 3621,
+  "shortages": [
+    {
+      "source": "smith",
+      "repo": "mewwts/addict",
+      "required": 10,
+      "eligible_unique_groups": 4
+    }
+  ],
+  "repo_inventory": [
+    {
+      "source": "gym",
+      "repo": "getmoto/moto",
+      "train_target": 50,
+      "validation_target": 10,
+      "eligible_groups": 307
+    },
+    {
+      "source": "gym",
+      "repo": "python/mypy",
+      "train_target": 50,
+      "validation_target": 10,
+      "eligible_groups": 253
+    },
+    {
+      "source": "gym",
+      "repo": "pydantic/pydantic",
+      "train_target": 40,
+      "validation_target": 8,
+      "eligible_groups": 78
+    },
+    {
+      "source": "gym",
+      "repo": "facebookresearch/hydra",
+      "train_target": 30,
+      "validation_target": 6,
+      "eligible_groups": 62
+    },
+    {
+      "source": "gym",
+      "repo": "iterative/dvc",
+      "train_target": 40,
+      "validation_target": 8,
+      "eligible_groups": 213
+    },
+    {
+      "source": "gym",
+      "repo": "conan-io/conan",
+      "train_target": 30,
+      "validation_target": 6,
+      "eligible_groups": 45
+    },
+    {
+      "source": "gym",
+      "repo": "pandas-dev/pandas",
+      "train_target": 40,
+      "validation_target": 8,
+      "eligible_groups": 695
+    },
+    {
+      "source": "gym",
+      "repo": "dask/dask",
+      "train_target": 20,
+      "validation_target": 4,
+      "eligible_groups": 132
+    },
+    {
+      "source": "smith",
+      "repo": "pallets/click",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 204
+    },
+    {
+      "source": "smith",
+      "repo": "pallets/jinja",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 217
+    },
+    {
+      "source": "smith",
+      "repo": "pallets/markupsafe",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 10
+    },
+    {
+      "source": "smith",
+      "repo": "marshmallow-code/marshmallow",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 131
+    },
+    {
+      "source": "smith",
+      "repo": "marshmallow-code/apispec",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 64
+    },
+    {
+      "source": "smith",
+      "repo": "python-jsonschema/jsonschema",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 128
+    },
+    {
+      "source": "smith",
+      "repo": "oauthlib/oauthlib",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 213
+    },
+    {
+      "source": "smith",
+      "repo": "mahmoud/boltons",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 65
+    },
+    {
+      "source": "smith",
+      "repo": "mewwts/addict",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 4
+    },
+    {
+      "source": "smith",
+      "repo": "arrow-py/arrow",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 62
+    },
+    {
+      "source": "smith",
+      "repo": "spulec/freezegun",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 39
+    },
+    {
+      "source": "smith",
+      "repo": "suor/funcy",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 178
+    },
+    {
+      "source": "smith",
+      "repo": "gruns/furl",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 38
+    },
+    {
+      "source": "smith",
+      "repo": "python-hyper/h11",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 62
+    },
+    {
+      "source": "smith",
+      "repo": "theskumar/python-dotenv",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 104
+    },
+    {
+      "source": "smith",
+      "repo": "pycqa/flake8",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 81
+    },
+    {
+      "source": "smith",
+      "repo": "davidhalter/parso",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 196
+    },
+    {
+      "source": "smith",
+      "repo": "erikrose/parsimonious",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 39
+    },
+    {
+      "source": "smith",
+      "repo": "r1chardj0n3s/parse",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 21
+    },
+    {
+      "source": "smith",
+      "repo": "lepture/mistune",
+      "train_target": 10,
+      "validation_target": 0,
+      "eligible_groups": 230
+    },
+    {
+      "source": "smith",
+      "repo": "mozilla/bleach",
+      "train_target": 0,
+      "validation_target": 10,
+      "eligible_groups": 89
+    },
+    {
+      "source": "smith",
+      "repo": "seperman/deepdiff",
+      "train_target": 0,
+      "validation_target": 10,
+      "eligible_groups": 139
+    },
+    {
+      "source": "smith",
+      "repo": "cloudpipe/cloudpickle",
+      "train_target": 0,
+      "validation_target": 10,
+      "eligible_groups": 67
+    },
+    {
+      "source": "smith",
+      "repo": "cookiecutter/cookiecutter",
+      "train_target": 0,
+      "validation_target": 10,
+      "eligible_groups": 49
+    }
+  ]
+}

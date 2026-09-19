@@ -1,0 +1,15 @@
+{
+  "model": "local",
+  "max_tokens": 32000,
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.276.7ff; cc_entrypoint=sdk-cli;"},
+    {"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."},
+    {"type": "text", "text": "You are naming a coding session so the user can pick it out of a long list of sessions. The title is a name for what the session is about, not a sentence describing the task."}
+  ],
+  "tools": [],
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Generate a title for this coding session about fixing SSM describe_parameters filter order."}]}
+  ],
+  "metadata": {"user_id": "{\"device_id\":\"fixture\",\"account_uuid\":\"\",\"session_id\":\"fixture-session-0001\"}"}
+}

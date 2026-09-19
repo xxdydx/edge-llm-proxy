@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import time
 from contextlib import suppress
 from typing import Any
@@ -74,6 +75,63 @@ CLOCK_EVENT_REASONS = (
         ),
     ),
 )
+
+
+class LocalBackendState:
+    """Exact proxy-side local concurrency plus sampled engine resources.
+
+    The counter uses a regular lock because reads may eventually come from
+    outside the request event loop.  Its operations contain no awaits, so an
+    increment/decrement is also atomic with respect to asyncio tasks.
+    """
+
+    def __init__(self, *, concurrency_limit: int) -> None:
+        self.concurrency_limit = concurrency_limit
+        self._requests_in_flight = 0
+        self._lock = threading.Lock()
+
+    @property
+    def requests_in_flight(self) -> int:
+        with self._lock:
+            return self._requests_in_flight
+
+    def begin_request(self) -> LocalRequestLease:
+        with self._lock:
+            self._requests_in_flight += 1
+            requests_in_flight_at_dispatch = self._requests_in_flight
+        return LocalRequestLease(self, requests_in_flight_at_dispatch)
+
+    def _end_request(self) -> None:
+        with self._lock:
+            if self._requests_in_flight <= 0:
+                raise RuntimeError("local request counter underflow")
+            self._requests_in_flight -= 1
+
+    def snapshot(self, resources: dict[str, Any] | None) -> dict[str, Any]:
+        """Combine exact state with the sampler's last cached snapshot."""
+        snapshot = dict(resources or {})
+        snapshot["proxy_requests_in_flight"] = self.requests_in_flight
+        snapshot["concurrency_limit"] = self.concurrency_limit
+        return snapshot
+
+
+class LocalRequestLease:
+    """One idempotent ownership token for one counted local request."""
+
+    def __init__(
+        self, state: LocalBackendState, requests_in_flight_at_dispatch: int
+    ) -> None:
+        self._state = state
+        self.requests_in_flight_at_dispatch = requests_in_flight_at_dispatch
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._state._end_request()
 
 
 def _gib(value: int | float) -> float:

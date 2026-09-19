@@ -1,0 +1,12 @@
+{
+  "task_uid": "smith:pallets__markupsafe.620c06c9.func_basic__cehsca9u",
+  "instance_id": "pallets__markupsafe.620c06c9.func_basic__cehsca9u",
+  "status": "fail",
+  "rejection_reason": "unsupported_architecture",
+  "source_key": "smith",
+  "source_image_reference": "swebench/swesmith.x86_64.pallets_1776_markupsafe.620c06c9",
+  "required_platform": "linux/amd64 (image reference is x86_64) ",
+  "host_platform": "linux/arm64/v8",
+  "harness": "SWE-Gym/SWE-Bench-Fork vendored official adapter",
+  "evidence": "The vendored harness has no SWE-smith adapter/semantics; the pinned Smith row supplies an x86_64 image reference and no base_commit/version. Native-arm64 execution was not emulated or substituted."
+}

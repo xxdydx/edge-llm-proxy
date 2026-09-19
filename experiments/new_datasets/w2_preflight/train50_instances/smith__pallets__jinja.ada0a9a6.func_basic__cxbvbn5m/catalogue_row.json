@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/jinja2/utils.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.pallets_1776_jinja.ada0a9a6",
+  "instance_id": "pallets__jinja.ada0a9a6.func_basic__cxbvbn5m",
+  "mutation_locations": [
+    "src/jinja2/utils.py|def select_autoescape("
+  ],
+  "pass_to_pass_count": 754,
+  "patch_sha256": "782427d903fed9183af519553b6ad167797addd54d051033f888e7d5e579d545",
+  "problem_sha256": "9050dc367d722e84924560400d19f2291d856fd9ce613297ba6ec57404c85d10",
+  "problem_statement": "select_autoescape function broken for mixed case file extensions\n\n#### Description\n\nThe `select_autoescape` function is not working correctly when template names contain mixed case file extensions. It appears to be doing the opposite of what's expected - files that should be autoescaped are not being autoescaped, and files that should not be autoescaped are being autoescaped.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom jinja2.utils import select_autoescape\n\n# Create autoescape function with html/htm enabled, txt disabled\nfunc = select_autoescape(\n    enabled_extensions=('html', '.htm'), \n    disabled_extensions=('txt',), \n    default_for_string='STRING', \n    default='NONE'\n)\n\n# These should return True (autoescape enabled)\nprint(\"foo.html:\", func('foo.html'))  # Expected: True\nprint(\"FOO.HTML:\", func('FOO.HTML'))  # Expected: True\n\n# This should return False (autoescape disabled)  \nprint(\"foo.txt:\", func('foo.txt'))    # Expected: False\nprint(\"FOO.TXT:\", func('FOO.TXT'))    # Expected: False\n\n# Unknown extensions should use default\nprint(\"unknown.foo:\", func('unknown.foo'))  # Expected: 'NONE'\n```\n\nThe function is returning the opposite results - HTML files are not being autoescaped when they should be, and TXT files are being autoescaped when they shouldn't be.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 462
+  },
+  "source_repo": "swesmith/pallets__jinja.ada0a9a6",
+  "source_split": "train",
+  "task_uid": "smith:pallets__jinja.ada0a9a6.func_basic__cxbvbn5m",
+  "upstream_repo": "pallets/jinja",
+  "version": null
+}

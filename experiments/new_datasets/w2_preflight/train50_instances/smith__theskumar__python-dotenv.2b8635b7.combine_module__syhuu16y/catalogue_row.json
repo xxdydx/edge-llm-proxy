@@ -1,0 +1,34 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/dotenv/cli.py",
+    "src/dotenv/main.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 9,
+  "image_name": "swebench/swesmith.x86_64.theskumar_1776_python-dotenv.2b8635b7",
+  "instance_id": "theskumar__python-dotenv.2b8635b7.combine_module__syhuu16y",
+  "mutation_locations": [
+    "src/dotenv/cli.py|def unset(ctx: click.Context, key: Any) -> None:",
+    "src/dotenv/main.py|class DotEnv:"
+  ],
+  "pass_to_pass_count": 112,
+  "patch_sha256": "13b7e28fd9e9ddde83c3ce8cee50d343a7a1a7d3d3a0117e9e1b69185d655acd",
+  "problem_sha256": "9bbe264d0ab213a3677ca29a47351bd3b9e37fbdc60a6e681abf94a51d009ef0",
+  "problem_statement": "# `dotenv` CLI run command returns empty string for missing keys instead of None\n\nI've noticed an issue with the `dotenv` CLI's `run` command and the `get_key` function. When trying to access a key that doesn't exist, it returns an empty string instead of `None`.\n\n## Expected Result\n\nWhen a key doesn't exist, `get_key` should return `None` as documented in previous versions.\n\n## Actual Result\n\nWhen a key doesn't exist, `get_key` returns an empty string (`\"\"`).\n\n## Reproduction Steps\n\n```python\nfrom dotenv import get_key\nimport os\n\n# Create a test .env file\nwith open(\".env\", \"w\") as f:\n    f.write(\"EXISTING_KEY=value\\n\")\n\n# Try to get a non-existent key\nresult = get_key(\".env\", \"NON_EXISTENT_KEY\")\nprint(f\"Result: '{result}', Type: {type(result)}\")\n# Outputs: Result: '', Type: <class 'str'>\n\n# Expected behavior would be:\n# Result: 'None', Type: <class 'NoneType'>\n```\n\nAdditionally, when using the CLI run command, it seems to have issues with file validation and environment variable handling:\n\n```bash\n# Create a .env file\necho \"TEST_VAR=hello\" > .env\n\n# This command fails with an error\npython -m dotenv run echo $TEST_VAR\n```\n\nI also noticed that the `run` command seems to be handling lowercase keys differently than before, which might affect case-sensitive environment variables.\n\n## System Information\n\nPython 3.10\npython-dotenv latest version\n\nHas anyone else encountered this issue? It seems like the behavior changed in a recent update.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00009-of-00011.parquet",
+    "parquet_sha256": "20923272dab2706c1e07e9e11a19373c5c642efbb594a3b1c104440cf8cfc132",
+    "row_index_in_file": 32
+  },
+  "source_repo": "swesmith/theskumar__python-dotenv.2b8635b7",
+  "source_split": "train",
+  "task_uid": "smith:theskumar__python-dotenv.2b8635b7.combine_module__syhuu16y",
+  "upstream_repo": "theskumar/python-dotenv",
+  "version": null
+}

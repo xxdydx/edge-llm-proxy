@@ -1,0 +1,33 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "addict/addict.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 120,
+  "image_name": "swebench/swesmith.x86_64.mewwts_1776_addict.75284f95",
+  "instance_id": "mewwts__addict.75284f95.func_pm_class_rm_base__snkf13dg",
+  "mutation_locations": [
+    "addict/addict.py|class Dict(dict):",
+    "addict/addict.py|old40bin:0"
+  ],
+  "pass_to_pass_count": 8,
+  "patch_sha256": "07188e3b76a47ace1ae780f0e2d18b7f4b270806241459f51a06bc8d81373f83",
+  "problem_sha256": "fc928a7d2f0e2b7b654df6724f05b468525a976c18cf86109700f6c1d93552be",
+  "problem_statement": "Dict class breaks when not inheriting from dict\n\n#### Description\n\nThe Dict class no longer works properly when it doesn't inherit from the built-in `dict` class. Basic operations like creating instances, accessing items, and using dict methods fail with various errors including RecursionError and AttributeError.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom addict import Dict\n\n# Basic instantiation fails\nd = Dict()\nprint(d)  # Should work but raises AttributeError\n\n# Setting and getting items fails\nd = Dict()\nd.test = 'value'  # Raises AttributeError\nprint(d.test)\n\n# Dict methods don't work\nd = Dict({'a': 1})  # Raises AttributeError\nd.update({'b': 2})  # Raises TypeError\n\n# isinstance check fails\nd = Dict()\nprint(isinstance(d, dict))  # Returns False instead of True\n```\n\nThe errors include:\n- `AttributeError: 'super' object has no attribute 'keys'`\n- `RecursionError: maximum recursion depth exceeded`\n- `TypeError: 'Dict' object is not subscriptable`\n\nThis breaks all basic functionality of the Dict class.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 527
+  },
+  "source_repo": "swesmith/mewwts__addict.75284f95",
+  "source_split": "train",
+  "task_uid": "smith:mewwts__addict.75284f95.func_pm_class_rm_base__snkf13dg",
+  "upstream_repo": "mewwts/addict",
+  "version": null
+}

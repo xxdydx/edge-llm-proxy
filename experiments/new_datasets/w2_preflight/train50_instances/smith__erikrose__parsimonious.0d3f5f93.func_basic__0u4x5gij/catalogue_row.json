@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "parsimonious/expressions.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 5,
+  "image_name": "swebench/swesmith.x86_64.erikrose_1776_parsimonious.0d3f5f93",
+  "instance_id": "erikrose__parsimonious.0d3f5f93.func_basic__0u4x5gij",
+  "mutation_locations": [
+    "parsimonious/expressions.py|class Literal(Expression):"
+  ],
+  "pass_to_pass_count": 78,
+  "patch_sha256": "4cea5247c875c224e4585d6789cb802a6081a731da86d4c723701023ace51e47",
+  "problem_sha256": "6209a68e4b0b0c7cabd9c34cccc9ffa562876c88664d1df818c07606f421a196",
+  "problem_statement": "Literal expressions produce reversed string representation\n\n#### Description\n\nWhen converting literal expressions to their string representation, the output is unexpectedly reversed. This affects grammar string conversion and debugging output.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom parsimonious import Grammar\n\n# Simple literal should display normally\ngrammar = Grammar('foo = \"bar\"')\nprint(str(grammar))\n# Expected: foo = 'bar'\n# Actual: foo = 'rab'\n\n# More complex example with multiple literals\ngrammar = Grammar('rule = \"hello\" \"world\"')\nprint(str(grammar))\n# Expected: rule = 'hello' 'world'  \n# Actual: rule = 'olleh' 'dlrow'\n\n# Parenthesized expressions also affected\ngrammar = Grammar('foo = (\"baz\" \"eggs\")')\nprint(str(grammar))\n# Expected: foo = ('baz' 'eggs')\n# Actual: foo = ('zab' 'sgge')\n```\n\nThe issue appears when any grammar containing literal strings is converted to its string representation - all literal values are displayed in reverse order.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 87
+  },
+  "source_repo": "swesmith/erikrose__parsimonious.0d3f5f93",
+  "source_split": "train",
+  "task_uid": "smith:erikrose__parsimonious.0d3f5f93.func_basic__0u4x5gij",
+  "upstream_repo": "erikrose/parsimonious",
+  "version": null
+}

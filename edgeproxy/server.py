@@ -8,6 +8,7 @@ knowing which is in play.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -22,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import router
+from .agentic_history import AgenticHistory
 from .cloud_cache import (
     CloudCacheObservation,
     CloudCachePrediction,
@@ -33,10 +35,14 @@ from .cloud_cache import (
 )
 from .cost import build_cost_savings
 from .config import Config, parse_args
-from .cohort import CohortTracker
+from .cohort import CohortTracker, agent_delegation_count
+from .cohort_parent import SIGNAL_NAME, is_cohort_parent_candidate
+from .completion import CompletionEstimator, predict_local_completion
+from .coordinator import CohortCoordinator, DispatchTicket
 from .local_cache import LocalCachePrediction, local_cache_trace, probe_local_cache
+from .reliability import ReliabilityCircuitBreaker
 from .shaping import LinkMonitor, LinkShaper
-from .telemetry import LocalResourceSampler
+from .telemetry import LocalBackendState, LocalResourceSampler
 from .timing import make_trace_extension
 from .trace.record import (
     SSEDecoder,
@@ -45,6 +51,7 @@ from .trace.record import (
     build_token_accounting,
     redact_headers,
     reassemble,
+    request_identity,
 )
 
 log = logging.getLogger("edgeproxy")
@@ -68,9 +75,19 @@ HOP_BY_HOP = {
 RESPONSE_STRIP = {"content-length", "content-encoding", "transfer-encoding", "connection"}
 
 LOCAL_TEMPERATURE = 0
-# Claude Code uses Anthropic's "high" effort spelling. Qwen3.8's chat template
-# calls the equivalent highest setting "xhigh" and rejects "high" outright.
-LOCAL_REASONING_EFFORT_ALIASES = {"high": "xhigh"}
+# Claude Code uses Anthropic's "high" effort spelling; Qwen3.8's chat template
+# rejects "high" outright, so it always needs remapping to a value Qwen
+# accepts. Originally mapped to "xhigh" (Qwen's actual top tier) to preserve
+# rough parity with what "high" means on Claude's own scale. Changed to
+# "medium" 2026-09-04 at Arul's request: local decode throughput is a fixed
+# ~30 tok/s regardless of effort level (measured, stable across 27+ hours and
+# multiple box provisions -- see claude-memory/wiki), so xhigh's extra
+# reasoning tokens don't decode any faster, they just add more tokens to
+# decode. This is a live hypothesis, not yet validated against task quality
+# -- see claude-memory/wiki/decisions/Lower local reasoning effort from
+# xhigh to medium.md. Applies to newly-launched jobs only; a running proxy
+# process keeps whatever alias was loaded when it started.
+LOCAL_REASONING_EFFORT_ALIASES = {"high": "medium"}
 
 
 def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any, int]:
@@ -116,10 +133,67 @@ def _usage_of(payload: Any) -> dict[str, Any]:
     return {}
 
 
+def _leader_warming_exemption_allowed(
+    policy: router.Policy,
+    features: router.CallFeatures,
+    decision: router.Decision,
+) -> bool:
+    """Allow only the approved cold-branch preference exemption.
+
+    Re-run StaticPolicy's hard gates directly, then explicitly preserve Rung
+    3's headroom gate because BranchDriftPolicy normally evaluates it only
+    after WarmLocalPolicy has accepted a call.  No other cloud decision can be
+    changed back to local here.
+    """
+    if decision.reason != "cold-branch-first-turn":
+        return False
+    if not isinstance(policy, router.WarmLocalPolicy):
+        return False
+    if router.StaticPolicy.decide(policy, features).placement != "local":
+        return False
+    if isinstance(policy, router.CombinedPolicy):
+        # CombinedPolicy composes all three escalation gates directly (it
+        # does not subclass BranchDriftPolicy/PlanningEscalationPolicy/
+        # PredictedRiskPolicy), so none of the isinstance branches below
+        # would otherwise catch it — re-check all three explicitly here.
+        if router.planning_turn_escalation(features, policy.planning_turns) is not None:
+            return False
+        if router.branch_drift_escalation(
+            features, policy.headroom_threshold, policy.budget()
+        ) is not None:
+            return False
+        if router.predicted_risk_escalation(features, policy.risk_threshold) is not None:
+            return False
+    elif isinstance(policy, router.BranchDriftPolicy):
+        if features.local_prompt_tokens is not None:
+            ratio = features.local_prompt_tokens / policy.budget()
+            if ratio >= policy.headroom_threshold:
+                return False
+    return True
+
+
 def make_app(cfg: Config) -> FastAPI:
     writer = TraceWriter(cfg.trace_dir)
     cloud_tracker = CloudCacheTracker()
     cohort_tracker = CohortTracker(window_ms=cfg.cohort_window_ms)
+    cohort_coordinator = CohortCoordinator(
+        window_ms=cfg.cohort_window_ms,
+        timeout_ms=cfg.cohort_barrier_timeout_ms,
+        poll_interval_ms=cfg.cohort_barrier_poll_ms,
+    )
+    cohort_detection_enabled = (
+        cfg.cohort_tracking == "observe" or cfg.cohort_parent_placement
+    )
+    reliability = ReliabilityCircuitBreaker()
+    completion_estimator = CompletionEstimator()
+    local_backend_state = LocalBackendState(
+        concurrency_limit=cfg.local_concurrency_limit
+    )
+    # vLLM mixes cache_salt into the first prefix-block hash without changing
+    # prompt rendering or token length.  Episode scope prevents sequential A/B
+    # conditions from warming each other; request scope is the bag-of-requests
+    # ablation in which even byte-identical prefixes cannot share KV blocks.
+    local_cache_namespace = cfg.episode_id or f"process-{uuid.uuid4()}"
 
     policy = router.build(
         cfg.policy,
@@ -127,6 +201,21 @@ def make_app(cfg: Config) -> FastAPI:
         margin=cfg.local_token_margin,
         output_reserve_tokens=cfg.local_output_reserve_tokens,
     )
+    agentic_history = AgenticHistory() if cfg.agentic_shadow_artifact is not None else None
+    agentic_shadow = None
+    if cfg.agentic_shadow_artifact is not None:
+        scorer = router.ArtifactHarmScorer.from_json(
+            cfg.agentic_shadow_artifact,
+            lambda f: f.agentic_shadow_features or {},
+        )
+        agentic_shadow = router.AdaptiveAgenticPolicy(
+            max_local_tokens=cfg.max_local_tokens,
+            margin=cfg.local_token_margin,
+            output_reserve_tokens=cfg.local_output_reserve_tokens,
+            harm_scorer=scorer,
+            baseline_policy=policy,
+            shadow=True,
+        )
 
     # `netem` means shaping happens outside this process; we record the claim
     # but must not also apply it, or the delay would be counted twice.
@@ -176,6 +265,16 @@ def make_app(cfg: Config) -> FastAPI:
                 await client.aclose()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+    # Stable, cheap request-time state for the future cohort planner.  The
+    # resource sampler itself is attached during lifespan startup.
+    app.state.local_backend_state = local_backend_state
+    app.state.completion_estimator = completion_estimator
+    app.state.agentic_history = agentic_history
+    app.state.cohort_coordinator = cohort_coordinator
+    # Exposed so a test (or a future operator endpoint) can inspect or, for
+    # determinism, reseed the recovery-probe RNG. Nothing on the request path
+    # reads it back from here — `proxy()` closes over `reliability` directly.
+    app.state.reliability = reliability
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -187,11 +286,16 @@ def make_app(cfg: Config) -> FastAPI:
             "episode_id": cfg.episode_id,
             "cohort_tracking": cfg.cohort_tracking,
             "cohort_window_ms": cfg.cohort_window_ms,
+            "cohort_parent_placement": cfg.cohort_parent_placement,
+            "cohort_barrier_timeout_ms": cfg.cohort_barrier_timeout_ms,
+            "cohort_barrier_poll_ms": cfg.cohort_barrier_poll_ms,
             "cloud_cache_tracking": cfg.cloud_cache_tracking,
             "local_cache_tracking": cfg.local_cache_tracking,
+            "local_cache_salt_scope": cfg.local_cache_salt_scope,
             "max_local_tokens": cfg.max_local_tokens,
             "local_token_margin": cfg.local_token_margin,
             "local_output_reserve_tokens": cfg.local_output_reserve_tokens,
+            "local_concurrency_limit": cfg.local_concurrency_limit,
             "effective_local_token_budget": int(
                 cfg.max_local_tokens * cfg.local_token_margin
             ),
@@ -203,6 +307,7 @@ def make_app(cfg: Config) -> FastAPI:
     )
     async def proxy(path: str, request: Request) -> Response:
         started = time.monotonic()
+        call_id = str(uuid.uuid4())
         body = await request.body()
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
 
@@ -240,10 +345,28 @@ def make_app(cfg: Config) -> FastAPI:
         cloud_prediction: CloudCachePrediction | None = None
         local_prediction: LocalCachePrediction | None = None
         cohort_detection: dict[str, Any] | None = None
+        tool_suite_hash: str | None = None
+        reliability_note: str | None = None
+        features: router.CallFeatures | None = None
+        local_resources_at_decision: dict[str, Any] | None = None
+        local_completion_prediction: dict[str, Any] | None = None
+        local_completion_prediction_eligible = False
+        local_dispatch_concurrency: int | None = None
+        local_probe_request: dict[str, Any] | None = None
+        local_cache_salt: str | None = None
+        agentic_history_key: str | None = None
+        agentic_history_sequence: int | None = None
+        agentic_shadow_record: dict[str, Any] | None = None
+        dispatch_ticket: DispatchTicket | None = None
+        cohort_dispatch: dict[str, Any] | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
+                if cfg.local_cache_salt_scope == "condition":
+                    local_cache_salt = local_cache_namespace
+                elif cfg.local_cache_salt_scope == "request":
+                    local_cache_salt = f"{local_cache_namespace}:{call_id}"
                 session = request.headers.get("x-claude-code-session-id")
-                if cfg.cohort_tracking == "observe":
+                if cohort_detection_enabled:
                     cohort_detection = cohort_tracker.match_child(
                         session_id=session,
                         request=original_request_json,
@@ -255,7 +378,52 @@ def make_app(cfg: Config) -> FastAPI:
                     prev = last_seen.get(session)
                     gap = round(now - prev, 1) if prev is not None else None
                     last_seen[session] = now
-                features = router.extract_features(request_json, gap)
+                features = replace(
+                    router.extract_features(request_json, gap),
+                    local_token_budget=int(
+                        cfg.max_local_tokens * cfg.local_token_margin
+                    ),
+                )
+                if agentic_history is not None:
+                    # The proxy is per episode in the SWE-bench harness. Keep
+                    # client sessions and explicit subagent IDs in separate
+                    # bounded lanes; do not share their previous placements.
+                    # Without a client session ID, a shared "no-session"
+                    # bucket could mix unrelated roots. Withhold the score.
+                    if session:
+                        metadata = request_json.get("metadata")
+                        parent_id = (
+                            request.headers.get("x-claude-code-parent-tool-use-id")
+                            or request.headers.get("x-parent-tool-use-id")
+                            or request_json.get("parent_tool_use_id")
+                            or (metadata.get("parent_tool_use_id") if isinstance(metadata, dict) else None)
+                        )
+                        agentic_history_key = "|".join((
+                            str(cfg.episode_id or "process"),
+                            str(session),
+                            str(request.headers.get("x-claude-code-agent-id") or "main"),
+                            str(parent_id or "no-parent"),
+                        ))
+                        try:
+                            agentic_history_sequence = agentic_history.begin(agentic_history_key)
+                        except RuntimeError:
+                            agentic_history_key = None
+
+                # Rung 1: resolve the circuit-breaker check to a plain bool
+                # here, where I/O and mutable state are allowed, so decide()
+                # stays a pure function of features. class_key/reliability_note
+                # are closed over below by finalize_structured_call() and the
+                # record dict.
+                tool_suite_hash = request_identity(request_json).get(
+                    "tool_suite_hash"
+                )
+                reliability_blocked, reliability_note = reliability.should_block(
+                    tool_suite_hash
+                )
+                features = replace(
+                    features, local_reliability_blocked=reliability_blocked
+                )
+
                 if cfg.local_cache_tracking == "observe":
                     # Probe the exact prompt that vLLM would receive. Generation
                     # controls are local-only and the original cloud request
@@ -263,6 +431,8 @@ def make_app(cfg: Config) -> FastAPI:
                     local_probe_request = copy.deepcopy(request_json)
                     _apply_local_generation_controls(local_probe_request)
                     local_probe_request["model"] = cfg.local_model_name
+                    if local_cache_salt is not None:
+                        local_probe_request["cache_salt"] = local_cache_salt
                     local_prediction = await probe_local_cache(
                         request.app.state.clients["local"], local_probe_request
                     )
@@ -280,6 +450,12 @@ def make_app(cfg: Config) -> FastAPI:
                             "live-ground-truth"
                             if local_prediction.available
                             else "unavailable"
+                        ),
+                    )
+                    features = replace(
+                        features,
+                        predicted_local_risk_score=(
+                            router.predict_local_risk_score(features)
                         ),
                     )
                 if cfg.cloud_cache_tracking == "observe":
@@ -308,8 +484,87 @@ def make_app(cfg: Config) -> FastAPI:
                         cloud_chain = None
                         cloud_prediction = None
                 feature_dict = asdict(features)
+                if agentic_history is not None and agentic_shadow is not None:
+                    snapshot = None
+                    unsupported = "history-lane-unavailable"
+                    if agentic_history_key is not None and agentic_history_sequence is not None:
+                        snapshot, unsupported = agentic_history.snapshot(
+                            agentic_history_key, agentic_history_sequence
+                        )
+                    if snapshot is not None:
+                        if features.local_prompt_tokens is None or not features.local_token_budget:
+                            unsupported = "exact-local-prompt-unavailable"
+                        else:
+                            shadow_features = {
+                                **snapshot,
+                                "local_prompt_tokens": float(features.local_prompt_tokens),
+                                "n_available_tools": float(features.n_tools),
+                                "errored_tool_result_density": float(features.errored_tool_result_density),
+                                "branch_turn_ordinal": float(features.branch_turn_ordinal or 0),
+                                "context_utilization_ratio": float(features.local_prompt_tokens / features.local_token_budget),
+                            }
+                            features = replace(features, agentic_shadow_features=shadow_features)
+                            unsupported = None
+                    shadow_decision = agentic_shadow.decide(features)
+                    agentic_shadow_record = {
+                        "artifact": str(cfg.agentic_shadow_artifact),
+                        "baseline_policy": policy.name,
+                        "baseline_placement": shadow_decision.placement,
+                        "reason": shadow_decision.reason,
+                        "detail": shadow_decision.detail,
+                        "feature_status": "complete" if unsupported is None else "unavailable",
+                        "unavailable_reason": unsupported,
+                        "feature_provenance": "current-request-and-completed-prior-calls-before-dispatch",
+                    }
+                    feature_dict = asdict(features)
+                if cfg.cohort_parent_placement and cohort_detection is not None:
+                    dispatch_ticket = cohort_coordinator.arrive(
+                        call_id=call_id,
+                        detection=cohort_detection,
+                        input_tokens=(
+                            local_prediction.input_tokens
+                            if local_prediction is not None
+                            else None
+                        ),
+                        arrived_at_monotonic=started,
+                    )
+                # This is a synchronous cached read immediately before the
+                # placement decision: no metrics I/O is added to routing.
+                local_resources_at_decision = local_backend_state.snapshot(
+                    request.app.state.resource_sampler.snapshot()
+                )
                 decision = policy.decide(features)
                 placement, reason, detail = decision.placement, decision.reason, decision.detail
+                if (
+                    cfg.cohort_parent_placement
+                    and cohort_detection is None
+                    and is_cohort_parent_candidate(original_request_json, headers)
+                ):
+                    placement = "cloud"
+                    reason = "cohort-parent-placement"
+                    detail = None
+
+                cohort_ready = bool(
+                    dispatch_ticket is not None
+                    and int(cohort_detection.get("expected_width") or 0) >= 2
+                )
+                warming_exemption = bool(
+                    cohort_ready
+                    and dispatch_ticket is not None
+                    and dispatch_ticket.role == "leader"
+                    and _leader_warming_exemption_allowed(policy, features, decision)
+                )
+                if warming_exemption:
+                    placement = "local"
+                    reason = "cohort-warming-leader"
+                    detail = "exempted cold-branch-first-turn preference gate"
+                if cohort_ready and dispatch_ticket is not None:
+                    cohort_dispatch = cohort_coordinator.trace_for(
+                        dispatch_ticket,
+                        policy_placement=decision.placement,
+                        policy_reason=decision.reason,
+                        warming_exemption=warming_exemption,
+                    )
 
                 # Local-only rewrites; cloud gets the request exactly as sent.
                 if placement == "local":
@@ -320,6 +575,8 @@ def make_app(cfg: Config) -> FastAPI:
                     if request_json.get("model") != cfg.local_model_name:
                         original_model = request_json.get("model")
                         request_json["model"] = cfg.local_model_name
+                    if local_cache_salt is not None:
+                        request_json["cache_salt"] = local_cache_salt
 
                     if hasattr(policy, "effective_max_tokens"):
                         want = policy.effective_max_tokens(features)
@@ -335,8 +592,55 @@ def make_app(cfg: Config) -> FastAPI:
                 log.exception("router failed — falling back to cloud")
                 placement = "cloud"
 
+        # Rung 4 step 4 is observe-only. Gate on the final placement, after
+        # the pure policy chain, the separate benchmark cohort-parent override,
+        # and any safe router fallback. Cloud calls never receive a local
+        # completion estimate. A local class with insufficient live history is
+        # traced explicitly as null rather than guessed.
+        if placement == "local" and features is not None:
+            local_completion_prediction_eligible = True
+            prediction = predict_local_completion(
+                features,
+                tool_suite_hash,
+                local_backend_state,
+                completion_estimator,
+            )
+            if prediction is not None:
+                local_completion_prediction = prediction.as_trace()
+
+        # The adjacent coordinator changes only dispatch timing after the final
+        # placement is known.  No lock is held across these awaits: cache probes
+        # and sleeps yield normally to unrelated FastAPI requests.
+        if cohort_dispatch is not None and dispatch_ticket is not None:
+            if placement != "local":
+                cohort_dispatch["release_reason"] = "not-held-cloud-gate"
+            elif dispatch_ticket.role == "leader":
+                cohort_coordinator.mark_leader_dispatched(
+                    dispatch_ticket,
+                    input_tokens=(
+                        local_prediction.input_tokens
+                        if local_prediction is not None
+                        else None
+                    ),
+                )
+            elif local_probe_request is not None:
+                await cohort_coordinator.hold_follower(
+                    dispatch_ticket,
+                    client=request.app.state.clients["local"],
+                    request_json=local_probe_request,
+                    initial_prediction=local_prediction,
+                    trace=cohort_dispatch,
+                )
+            else:
+                cohort_dispatch["release_reason"] = "timeout"
+
+        if local_resources_at_decision is None:
+            local_resources_at_decision = local_backend_state.snapshot(
+                request.app.state.resource_sampler.snapshot()
+            )
+
         record: dict[str, Any] = {
-            "id": str(uuid.uuid4()),
+            "id": call_id,
             "ts": time.time(),
             "path": "/" + path,
             "method": request.method,
@@ -360,18 +664,44 @@ def make_app(cfg: Config) -> FastAPI:
             "strict_tools_added": strict_tools_added,
             "backend": cfg.backends[placement],
             "features": feature_dict,
+            "agentic_shadow": agentic_shadow_record,
+            "reliability": {
+                "class_key": tool_suite_hash,
+                "note": reliability_note,
+                "failure_rate": reliability.failure_rate(tool_suite_hash),
+            },
             "cohort_detection": cohort_detection,
+            "cohort_dispatch": cohort_dispatch,
             "headers": redact_headers(request.headers),
             "request": request_json,
             # Present even on transport/provider errors so downstream analysis
             # can distinguish unavailable usage (null) from measured zero.
             "usage": {},
             "token_accounting": build_token_accounting({}),
+            # Always present, including cloud placements.  The exact proxy
+            # count and sampled vLLM running/waiting values describe the state
+            # seen immediately before policy.decide() for routable calls.
+            "local_resources": local_resources_at_decision,
+            "local_cache_salt_scope": cfg.local_cache_salt_scope,
         }
+        if reason == "cohort-parent-placement":
+            record["cohort_parent_placement"] = {
+                "candidate": True,
+                "signal": SIGNAL_NAME,
+                "outcome": "pending",
+                "did_fan_out": None,
+                "agent_delegation_count": None,
+            }
+        if local_completion_prediction_eligible:
+            record["local_completion_prediction"] = local_completion_prediction
 
         def finalize_structured_call() -> None:
             try:
-                if cfg.cohort_tracking == "observe":
+                if cohort_detection_enabled:
+                    # Streaming Agent blocks are normally registered at their
+                    # content_block_stop event. Keep this reconciliation for
+                    # non-streaming responses and unusual/incomplete streams;
+                    # CohortTracker deduplicates the shared tool-use IDs.
                     parent_detection = cohort_tracker.observe_parent(
                         call_id=str(record["id"]),
                         session_id=(record.get("headers") or {}).get(
@@ -387,9 +717,127 @@ def make_app(cfg: Config) -> FastAPI:
             except Exception:
                 # Trace enrichment must never interrupt a proxied response.
                 log.exception("structured call trace failed (ignored)")
+            if agentic_history is not None and agentic_history_key is not None and agentic_history_sequence is not None:
+                try:
+                    if record.get("error") is not None or not isinstance(record.get("response"), dict):
+                        agentic_history.abort(agentic_history_key, agentic_history_sequence)
+                    else:
+                        agentic_history.complete(
+                            agentic_history_key,
+                            agentic_history_sequence,
+                            request=original_request_json,
+                            errored_tool_result_density=(
+                                features.errored_tool_result_density if features is not None else 0.0
+                            ),
+                            placement=str(record.get("placement") or ""),
+                            response=record["response"],
+                            tool_use_blocks=list(((record.get("call") or {}).get("tool_use_blocks")) or []),
+                        )
+                except Exception:
+                    log.exception("agentic shadow history update failed (ignored)")
+            try:
+                parent_placement = record.get("cohort_parent_placement")
+                response = record.get("response")
+                if isinstance(parent_placement, dict):
+                    if isinstance(response, dict):
+                        delegation_count = agent_delegation_count(response)
+                        did_fan_out = delegation_count > 0
+                        parent_placement.update(
+                            {
+                                "outcome": (
+                                    "true_positive"
+                                    if did_fan_out
+                                    else "false_positive"
+                                ),
+                                "did_fan_out": did_fan_out,
+                                "agent_delegation_count": delegation_count,
+                            }
+                        )
+                    else:
+                        parent_placement["outcome"] = "unknown"
+            except Exception:
+                log.exception("cohort parent-placement outcome failed (ignored)")
+            try:
+                # Rung 1: close the loop for *future* calls in this class.
+                # A local call with no tool_use blocks (pure text/thinking,
+                # or ended via end_turn) has no schema-validity evidence
+                # either way and vacuously counts as a success -- but only
+                # when the call actually completed. A transport failure
+                # (record["error"] set) or an SSE reassembly failure (no
+                # "response" dict; relay() falls back to recording only
+                # "response_bytes") also leaves tool_use_blocks empty, and
+                # without this guard both would be recorded as false
+                # successes, diluting real failures enough to keep a
+                # genuinely unreliable class's circuit closed. Found by
+                # Codex code review, see claude-memory/wiki/decisions/Codex
+                # code review of Rung 1 and Rung 3 diff.md.
+                response_ok = (
+                    isinstance(record.get("response"), dict)
+                    and record.get("error") is None
+                )
+                if (
+                    record.get("placement") == "local"
+                    and tool_suite_hash is not None
+                    and response_ok
+                ):
+                    blocks = ((record.get("call") or {}).get("tool_use_blocks")) or []
+                    success = not any(
+                        block.get("schema_valid") is False for block in blocks
+                    )
+                    reliability.record(tool_suite_hash, success)
+            except Exception:
+                log.exception("reliability circuit breaker update failed (ignored)")
+            try:
+                # Advance deployment-specific EWMAs only from real, completed
+                # local outcomes. Output length is available for non-streaming
+                # calls too; TPOT advances only when the existing stream timing
+                # instrumentation measured it.
+                response_ok = (
+                    isinstance(record.get("response"), dict)
+                    and record.get("error") is None
+                )
+                if (
+                    record.get("placement") == "local"
+                    and tool_suite_hash is not None
+                    and response_ok
+                ):
+                    raw_output_tokens = (record.get("usage") or {}).get(
+                        "output_tokens"
+                    )
+                    try:
+                        measured_output_tokens = int(raw_output_tokens)
+                    except (TypeError, ValueError):
+                        measured_output_tokens = None
+                    completion_estimator.record(
+                        tool_suite_hash,
+                        output_tokens=measured_output_tokens,
+                        tpot_ms=(record.get("timing") or {}).get("tpot_ms"),
+                        concurrency=local_dispatch_concurrency,
+                    )
+            except Exception:
+                log.exception("completion estimator update failed (ignored)")
+            try:
+                if cohort_dispatch is not None:
+                    actual_read = ((record.get("local_cache") or {}).get("actual") or {}).get(
+                        "cache_read_input_tokens"
+                    )
+                    cohort_dispatch["realized_outcome"] = {
+                        "status": record.get("status"),
+                        "error": record.get("error"),
+                        "actual_cache_read_tokens": actual_read,
+                        "leader_completed": (
+                            (
+                                isinstance(record.get("response"), dict)
+                                and record.get("error") is None
+                            )
+                            if dispatch_ticket is not None
+                            and dispatch_ticket.role == "leader"
+                            else None
+                        ),
+                    }
+            except Exception:
+                log.exception("cohort dispatch outcome tracing failed (ignored)")
 
-        if placement == "local":
-            record["local_resources"] = request.app.state.resource_sampler.snapshot()
         if local_prediction is not None:
             record["local_cache"] = local_cache_trace(
                 local_prediction, selected=placement == "local"
@@ -424,6 +872,23 @@ def make_app(cfg: Config) -> FastAPI:
         # Uplink cost, cloud only. Local is loopback and gets nothing.
         shaped_ms = await shaper.apply(len(body)) if placement == "cloud" else 0.0
 
+        local_request_lease = (
+            local_backend_state.begin_request() if placement == "local" else None
+        )
+        if local_request_lease is not None:
+            local_dispatch_concurrency = (
+                local_request_lease.requests_in_flight_at_dispatch
+            )
+        request_task = asyncio.current_task()
+        if local_request_lease is not None and request_task is not None:
+            # Final backstop for an unexpected exception anywhere after
+            # acquisition. Normal paths release earlier; the lease is
+            # idempotent, so task completion cannot double-decrement.
+            request_task.add_done_callback(
+                lambda _task: local_request_lease.release()
+            )
+
+        upstream: httpx.Response | None = None
         try:
             upstream = await client.send(upstream_request, stream=streaming)
         except httpx.HTTPError as exc:
@@ -442,6 +907,13 @@ def make_app(cfg: Config) -> FastAPI:
                     "error": {"type": "upstream_error", "message": str(exc)},
                 },
             )
+        finally:
+            # Includes the handled HTTPError path, unexpected exceptions, and
+            # task cancellation while waiting for response headers.
+            if local_request_lease is not None and upstream is None:
+                local_request_lease.release()
+
+        assert upstream is not None
 
         out_headers = {
             k: v for k, v in upstream.headers.items() if k.lower() not in RESPONSE_STRIP
@@ -499,51 +971,63 @@ def make_app(cfg: Config) -> FastAPI:
                 log.exception("cloud cache observation failed (ignored)")
 
         if not streaming:
-            payload = await upstream.aread()
-            await upstream.aclose()
             try:
-                parsed = json.loads(payload)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                parsed = None
-            usage = _usage_of(parsed)
-            observe_cloud_cache(usage)
-            if local_prediction is not None:
-                record["local_cache"] = local_cache_trace(
-                    local_prediction, usage, selected=placement == "local"
+                payload = await upstream.aread()
+                try:
+                    parsed = json.loads(payload)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    parsed = None
+                usage = _usage_of(parsed)
+                observe_cloud_cache(usage)
+                if local_prediction is not None:
+                    record["local_cache"] = local_cache_trace(
+                        local_prediction, usage, selected=placement == "local"
+                    )
+                if cloud_prediction is not None:
+                    record["cloud_cache"] = cloud_cache_trace(
+                        cloud_prediction,
+                        usage,
+                        cloud_observation,
+                        selected=placement == "cloud",
+                    )
+                record |= {
+                    "response": parsed,
+                    "usage": usage,
+                    "token_accounting": build_token_accounting(
+                        usage,
+                        observed_input_tokens=(feature_dict or {}).get(
+                            "local_prompt_tokens"
+                        ),
+                        observed_input_source="local_render_probe",
+                    ),
+                    "timing": {
+                        "total_ms": round((time.monotonic() - started) * 1000, 1),
+                        "network_ms": net_ms,
+                        **conn.as_dict(),
+                    },
+                }
+                if path.rstrip("/") == "v1/messages":
+                    record["cost_savings"] = build_cost_savings(
+                        placement=placement,
+                        requested_model=requested_model,
+                        usage=usage,
+                        chain=cloud_chain,
+                        prediction=cloud_prediction,
+                    )
+                finalize_structured_call()
+                writer.write(record)
+                return Response(
+                    content=payload,
+                    status_code=upstream.status_code,
+                    headers=out_headers,
+                    media_type=upstream.headers.get("content-type"),
                 )
-            if cloud_prediction is not None:
-                record["cloud_cache"] = cloud_cache_trace(
-                    cloud_prediction,
-                    usage,
-                    cloud_observation,
-                    selected=placement == "cloud",
-                )
-            record |= {
-                "response": parsed,
-                "usage": usage,
-                "token_accounting": build_token_accounting(usage),
-                "timing": {
-                    "total_ms": round((time.monotonic() - started) * 1000, 1),
-                    "network_ms": net_ms,
-                    **conn.as_dict(),
-                },
-            }
-            if path.rstrip("/") == "v1/messages":
-                record["cost_savings"] = build_cost_savings(
-                    placement=placement,
-                    requested_model=requested_model,
-                    usage=usage,
-                    chain=cloud_chain,
-                    prediction=cloud_prediction,
-                )
-            finalize_structured_call()
-            writer.write(record)
-            return Response(
-                content=payload,
-                status_code=upstream.status_code,
-                headers=out_headers,
-                media_type=upstream.headers.get("content-type"),
-            )
+            finally:
+                try:
+                    await upstream.aclose()
+                finally:
+                    if local_request_lease is not None:
+                        local_request_lease.release()
 
         async def relay():
             """Forward chunks the instant they arrive, keeping a copy for the trace.
@@ -557,100 +1041,179 @@ def make_app(cfg: Config) -> FastAPI:
             last_output_at: float | None = None
             decoder = SSEDecoder()
             decoded_events: list[dict[str, Any]] = []
+            block_events: dict[int, list[dict[str, Any]]] = {}
+            saw_message_stop = False
+
+            def process_stream_event(event: dict[str, Any], now: float) -> None:
+                nonlocal first_output_at, last_output_at, ttft_ms, saw_message_stop
+                event_type = event.get("type")
+                if event_type == "message_stop":
+                    saw_message_stop = True
+                if event_type == "message_start":
+                    observe_cloud_cache(_usage_of(event.get("message")))
+                if event_type == "content_block_start":
+                    block_events[event.get("index", 0)] = [event]
+                elif event_type == "content_block_delta":
+                    block_events.setdefault(event.get("index", 0), []).append(event)
+                    if first_output_at is None:
+                        first_output_at = now
+                        ttft_ms = round((now - started) * 1000, 1)
+                    last_output_at = now
+                elif event_type == "content_block_stop":
+                    events_for_block = block_events.pop(event.get("index", 0), None)
+                    if not events_for_block or not cohort_detection_enabled:
+                        return
+                    try:
+                        block_message, _ = reassemble(events_for_block)
+                        content = block_message.get("content") or []
+                        block = content[0] if content else None
+                        tool_input = (
+                            block.get("input") if isinstance(block, dict) else None
+                        )
+                        prompt = (
+                            tool_input.get("prompt")
+                            if isinstance(tool_input, dict)
+                            else None
+                        )
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_use"
+                            and block.get("name") == "Agent"
+                            and block.get("id")
+                            and isinstance(prompt, str)
+                            and prompt
+                        ):
+                            parent_detection = cohort_tracker.register_delegation(
+                                call_id=str(record["id"]),
+                                session_id=(record.get("headers") or {}).get(
+                                    "x-claude-code-session-id"
+                                ),
+                                backend=record.get("placement"),
+                                tool_use_id=str(block["id"]),
+                                prompt=prompt,
+                                observed_at_unix_s=time.time(),
+                            )
+                            if parent_detection is not None:
+                                record["cohort_detection"] = parent_detection
+                    except Exception:
+                        # Cohort observation must never interrupt the stream.
+                        log.exception(
+                            "streamed cohort delegation registration failed (ignored)"
+                        )
+
             try:
                 async for chunk in upstream.aiter_bytes():
                     now = time.monotonic()
                     events = decoder.feed(chunk)
                     decoded_events.extend(events)
                     for event in events:
-                        if event.get("type") == "message_start":
-                            observe_cloud_cache(_usage_of(event.get("message")))
-                        if event.get("type") == "content_block_delta":
-                            if first_output_at is None:
-                                first_output_at = now
-                                ttft_ms = round((now - started) * 1000, 1)
-                            last_output_at = now
+                        process_stream_event(event, now)
                     accumulated.extend(chunk)
                     yield chunk
             except httpx.HTTPError as exc:
                 record["error"] = repr(exc)
                 log.warning("stream interrupted on %s: %s", path, exc)
+            except (asyncio.CancelledError, GeneratorExit) as exc:
+                record["error"] = f"StreamAborted({type(exc).__name__})"
+                raise
+            except Exception as exc:
+                record["error"] = f"StreamAborted({type(exc).__name__}: {exc})"
+                raise
             finally:
-                await upstream.aclose()
                 try:
-                    decoded_events.extend(decoder.finish())
-                    message, usage = reassemble(decoded_events)
-                    observe_cloud_cache(usage)
-                    if local_prediction is not None:
-                        record["local_cache"] = local_cache_trace(
-                            local_prediction, usage, selected=placement == "local"
-                        )
-                    output_tokens = usage.get("output_tokens")
                     try:
-                        output_tokens = int(output_tokens)
-                    except (TypeError, ValueError):
-                        output_tokens = None
-                    output_duration_ms = (
-                        round((last_output_at - first_output_at) * 1000, 1)
-                        if first_output_at is not None and last_output_at is not None
-                        else None
-                    )
-                    tpot_ms = (
-                        round(output_duration_ms / (output_tokens - 1), 3)
-                        if output_duration_ms is not None
-                        and output_tokens is not None
-                        and output_tokens > 1
-                        else None
-                    )
-                    output_tokens_per_s = (
-                        round((output_tokens - 1) * 1000 / output_duration_ms, 3)
-                        if output_duration_ms is not None
-                        and output_duration_ms > 0
-                        and output_tokens is not None
-                        and output_tokens > 1
-                        else None
-                    )
-                    if cloud_prediction is not None:
-                        record["cloud_cache"] = cloud_cache_trace(
-                            cloud_prediction,
-                            usage,
-                            cloud_observation,
-                            selected=placement == "cloud",
+                        await upstream.aclose()
+                        tail_events = decoder.finish()
+                        decoded_events.extend(tail_events)
+                        for event in tail_events:
+                            process_stream_event(event, time.monotonic())
+                        # Reassembly can produce a plausible response from a
+                        # prefix. Anthropic's message_stop is the only end-of-
+                        # message proof for a normally exhausted SSE stream.
+                        if not saw_message_stop and record.get("error") is None:
+                            record["error"] = "StreamIncomplete(message_stop missing)"
+                        record["stream_complete"] = saw_message_stop and record.get("error") is None
+                        message, usage = reassemble(decoded_events)
+                        observe_cloud_cache(usage)
+                        if local_prediction is not None:
+                            record["local_cache"] = local_cache_trace(
+                                local_prediction, usage, selected=placement == "local"
+                            )
+                        output_tokens = usage.get("output_tokens")
+                        try:
+                            output_tokens = int(output_tokens)
+                        except (TypeError, ValueError):
+                            output_tokens = None
+                        output_duration_ms = (
+                            round((last_output_at - first_output_at) * 1000, 1)
+                            if first_output_at is not None and last_output_at is not None
+                            else None
                         )
-                    record.update({
-                        "response": message,
-                        "usage": usage,
-                        "token_accounting": build_token_accounting(usage),
-                        "timing": {
-                            "ttft_ms": ttft_ms,
-                            "output_duration_ms": output_duration_ms,
-                            "tpot_ms": tpot_ms,
-                            "output_tokens_per_s": output_tokens_per_s,
-                            "total_ms": round((time.monotonic() - started) * 1000, 1),
-                            "network_ms": net_ms,
-                            # Queueing + prefill, with the link taken out. This
-                            # is the term a cost model gets fitted against.
-                            "server_ttft_ms": (
-                                round(ttft_ms - net_ms, 1)
-                                if ttft_ms is not None and net_ms is not None
-                                else None
+                        tpot_ms = (
+                            round(output_duration_ms / (output_tokens - 1), 3)
+                            if output_duration_ms is not None
+                            and output_tokens is not None
+                            and output_tokens > 1
+                            else None
+                        )
+                        output_tokens_per_s = (
+                            round((output_tokens - 1) * 1000 / output_duration_ms, 3)
+                            if output_duration_ms is not None
+                            and output_duration_ms > 0
+                            and output_tokens is not None
+                            and output_tokens > 1
+                            else None
+                        )
+                        if cloud_prediction is not None:
+                            record["cloud_cache"] = cloud_cache_trace(
+                                cloud_prediction,
+                                usage,
+                                cloud_observation,
+                                selected=placement == "cloud",
+                            )
+                        record.update({
+                            "response": message,
+                            "usage": usage,
+                            "token_accounting": build_token_accounting(
+                                usage,
+                                observed_input_tokens=(feature_dict or {}).get(
+                                    "local_prompt_tokens"
+                                ),
+                                observed_input_source="local_render_probe",
                             ),
-                            **conn.as_dict(),
-                        },
-                    })
-                    if path.rstrip("/") == "v1/messages":
-                        record["cost_savings"] = build_cost_savings(
-                            placement=placement,
-                            requested_model=requested_model,
-                            usage=usage,
-                            chain=cloud_chain,
-                            prediction=cloud_prediction,
-                        )
-                except Exception:
-                    log.exception("SSE reassembly failed (recording raw length only)")
-                    record["response_bytes"] = len(accumulated)
-                finalize_structured_call()
-                writer.write(record)
+                            "timing": {
+                                "ttft_ms": ttft_ms,
+                                "output_duration_ms": output_duration_ms,
+                                "tpot_ms": tpot_ms,
+                                "output_tokens_per_s": output_tokens_per_s,
+                                "total_ms": round((time.monotonic() - started) * 1000, 1),
+                                "network_ms": net_ms,
+                                # Queueing + prefill, with the link taken out. This
+                                # is the term a cost model gets fitted against.
+                                "server_ttft_ms": (
+                                    round(ttft_ms - net_ms, 1)
+                                    if ttft_ms is not None and net_ms is not None
+                                    else None
+                                ),
+                                **conn.as_dict(),
+                            },
+                        })
+                        if path.rstrip("/") == "v1/messages":
+                            record["cost_savings"] = build_cost_savings(
+                                placement=placement,
+                                requested_model=requested_model,
+                                usage=usage,
+                                chain=cloud_chain,
+                                prediction=cloud_prediction,
+                            )
+                    except Exception:
+                        log.exception("SSE reassembly failed (recording raw length only)")
+                        record["response_bytes"] = len(accumulated)
+                    finalize_structured_call()
+                    writer.write(record)
+                finally:
+                    if local_request_lease is not None:
+                        local_request_lease.release()
 
         return StreamingResponse(
             relay(),

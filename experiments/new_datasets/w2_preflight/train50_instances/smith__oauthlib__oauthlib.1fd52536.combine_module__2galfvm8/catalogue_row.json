@@ -1,0 +1,34 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "oauthlib/oauth1/rfc5849/endpoints/authorization.py",
+    "oauthlib/oauth1/rfc5849/endpoints/base.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 36,
+  "image_name": "swebench/swesmith.x86_64.oauthlib_1776_oauthlib.1fd52536",
+  "instance_id": "oauthlib__oauthlib.1fd52536.combine_module__2galfvm8",
+  "mutation_locations": [
+    "oauthlib/oauth1/rfc5849/endpoints/authorization.py|class AuthorizationEndpoint(BaseEndpoint):",
+    "oauthlib/oauth1/rfc5849/endpoints/base.py|class BaseEndpoint:"
+  ],
+  "pass_to_pass_count": 637,
+  "patch_sha256": "93c5d9fcf15d66ce1616527d2e0c346575fc21dcae70f62f46fd67689098f9d7",
+  "problem_sha256": "dca91de1680a29c1afca6652843fa8d48d99c8040fb451822fe9f57d1f3fab6d",
+  "problem_statement": "OAuth1 signature verification and parameter validation broken\n\n#### Description\n\nOAuth1 endpoint validation is completely broken - signature verification is inverted, parameter checks are using wrong logic operators, and various validation methods are failing.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom oauthlib.oauth1 import Client\nfrom oauthlib.oauth1.rfc5849.endpoints import RequestTokenEndpoint\nfrom oauthlib.common import Request\n\n# Create a simple OAuth1 client and endpoint\nclient = Client('client_key')\nendpoint = RequestTokenEndpoint()\n\n# Try to create a valid request token\nuri = 'https://example.com/request_token'\nuri, headers, body = client.sign(uri, http_method='POST')\n\n# This should work but fails\ntry:\n    h, b, s = endpoint.create_request_token_response(uri, http_method='POST', headers=headers)\n    print(f\"Status: {s}, Body: {b}\")\nexcept Exception as e:\n    print(f\"Error: {e}\")\n```\n\nThe OAuth1 implementation appears to have multiple validation issues where valid requests are being rejected and invalid requests might be accepted.\n\n#### Expected Behavior\n\nValid OAuth1 requests should be accepted and processed correctly, while invalid requests should be properly rejected with appropriate error messages.\n\n#### Actual Behavior\n\nValid OAuth1 requests are being rejected due to inverted validation logic throughout the codebase.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00000-of-00011.parquet",
+    "parquet_sha256": "302a383bb9229c42063ff2364b2ea637e9e7a20d82e0d566614d3aba9234833d",
+    "row_index_in_file": 197
+  },
+  "source_repo": "swesmith/oauthlib__oauthlib.1fd52536",
+  "source_split": "train",
+  "task_uid": "smith:oauthlib__oauthlib.1fd52536.combine_module__2galfvm8",
+  "upstream_repo": "oauthlib/oauthlib",
+  "version": null
+}

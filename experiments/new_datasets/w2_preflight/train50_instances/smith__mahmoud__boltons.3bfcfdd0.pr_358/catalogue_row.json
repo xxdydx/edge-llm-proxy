@@ -1,0 +1,33 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "boltons/fileutils.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 1,
+  "image_name": "swebench/swesmith.x86_64.mahmoud_1776_boltons.3bfcfdd0",
+  "instance_id": "mahmoud__boltons.3bfcfdd0.pr_358",
+  "mutation_locations": [
+    "boltons/fileutils.py|class AtomicSaver:",
+    "boltons/fileutils.py|def iter_find_files(directory, patterns, ignored=None, include_dirs=False, max_d"
+  ],
+  "pass_to_pass_count": 411,
+  "patch_sha256": "6f9712678b5ea11dd2c13585be76f8595e0dc1b86adb309ebf1ee9c4c24f1a89",
+  "problem_sha256": "ba92c39b6d50f958826996f5c3bfe7bc32475cb80653110eab7bf3889e453b8a",
+  "problem_statement": "iter_find_files: max_depth parameter missing\n\nI was trying to use the iter_find_files function with the max_depth parameter to limit how deep it searches in subdirectories, but it seems like the parameter is missing.\n\n```python\nfrom boltons.fileutils import iter_find_files\n\n# This works\nfiles = list(iter_find_files(\"my_directory\", patterns=[\"*.py\"]))\n\n# This fails\nfiles = list(iter_find_files(\"my_directory\", patterns=[\"*.py\"], max_depth=1))\n# TypeError: iter_find_files() got an unexpected keyword argument 'max_depth'\n```\n\nThe documentation mentions the max_depth parameter, but when I try to use it, I get an error saying it's an unexpected keyword argument.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00001-of-00011.parquet",
+    "parquet_sha256": "f15e5b8ab49866e93245a736056fab680d6dde8fb5c2ba89c06241cf12a32afe",
+    "row_index_in_file": 1789
+  },
+  "source_repo": "swesmith/mahmoud__boltons.3bfcfdd0",
+  "source_split": "train",
+  "task_uid": "smith:mahmoud__boltons.3bfcfdd0.pr_358",
+  "upstream_repo": "mahmoud/boltons",
+  "version": null
+}

@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/marshmallow/fields.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 13,
+  "image_name": "swebench/swesmith.x86_64.marshmallow-code_1776_marshmallow.9716fc62",
+  "instance_id": "marshmallow-code__marshmallow.9716fc62.func_basic__6gq4ts94",
+  "mutation_locations": [
+    "src/marshmallow/fields.py|class Float(Number):"
+  ],
+  "pass_to_pass_count": 1175,
+  "patch_sha256": "870eb4dd7da9d5c2ebb19ba31783b21bca35ca2919716b3da013e7d76a96066e",
+  "problem_sha256": "493a0aa62f5dac029892ef2fd33bd8a80ee2a4c19ccb2ecf4b011fdccbc5454b",
+  "problem_statement": "Float field parameters inverted causing unexpected behavior\n\n#### Description\n\nThe Float field's `allow_nan` and `as_string` parameters appear to be behaving in reverse of their expected behavior. When `allow_nan=True` is set, NaN and infinity values are rejected, and when `allow_nan=False`, they are accepted. Similarly, the `as_string` parameter seems to be inverted.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom marshmallow import fields\nimport math\n\n# This should allow NaN but doesn't\nfield_allow_nan = fields.Float(allow_nan=True)\ntry:\n    result = field_allow_nan.deserialize('nan')\n    print(\"Success: NaN allowed\")\nexcept Exception as e:\n    print(f\"Error: {e}\")  # This prints an error when it shouldn't\n\n# This should reject NaN but doesn't  \nfield_no_nan = fields.Float(allow_nan=False)\ntry:\n    result = field_no_nan.deserialize('nan')\n    print(\"Success: NaN was accepted when it should be rejected\")\nexcept Exception as e:\n    print(f\"Error: {e}\")\n\n# as_string parameter also seems inverted\nfield_as_string = fields.Float(as_string=True)\nresult = field_as_string._serialize(42.0, None, None)\nprint(f\"Expected string, got: {type(result)} - {result}\")\n```\n\nExpected output:\n- `allow_nan=True` should accept NaN/infinity values\n- `allow_nan=False` should reject NaN/infinity values  \n- `as_string=True` should return string representations of floats\n\nActual output:\n- `allow_nan=True` rejects NaN/infinity values\n- `allow_nan=False` accepts NaN/infinity values\n- `as_string=True` returns float values instead of strings",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00005-of-00011.parquet",
+    "parquet_sha256": "517420b48132eda3c073e6b9bc5fecbaf34c3dea7f3fec49a46f8615584f8200",
+    "row_index_in_file": 857
+  },
+  "source_repo": "swesmith/marshmallow-code__marshmallow.9716fc62",
+  "source_split": "train",
+  "task_uid": "smith:marshmallow-code__marshmallow.9716fc62.func_basic__6gq4ts94",
+  "upstream_repo": "marshmallow-code/marshmallow",
+  "version": null
+}

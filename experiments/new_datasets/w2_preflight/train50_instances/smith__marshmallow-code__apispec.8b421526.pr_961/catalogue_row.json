@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/apispec/ext/marshmallow/field_converter.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 2,
+  "image_name": "swebench/swesmith.x86_64.marshmallow-code_1776_apispec.8b421526",
+  "instance_id": "marshmallow-code__apispec.8b421526.pr_961",
+  "mutation_locations": [
+    "src/apispec/ext/marshmallow/field_converter.py|class FieldConverterMixin:"
+  ],
+  "pass_to_pass_count": 567,
+  "patch_sha256": "b700288c5e9cc168d355482c861e99142f7ec058d0da65d23c35d0f7b8ea0415",
+  "problem_sha256": "6e7eb938bdfa542806448ea5459cbb0d10a533943eea9138d75e068fba203f37",
+  "problem_statement": "Nullable `Raw` fields are not handled well for OAS 3.1.0\nWhen converting a nullable `Raw` Marshmallow field into its corresponding OpenAPI representation for OAS 3.1.0, the generated representation does not match the behaviour of the actual schema/field:\r\n\r\n```python\r\nimport jsonschema\r\nfrom marshmallow import Schema, fields\r\n\r\nfrom apispec import APISpec\r\nfrom apispec.ext.marshmallow import OpenAPIConverter\r\n\r\n\r\nclass TestSchema(Schema):\r\n    raw_field = fields.Raw(allow_none=True)\r\n\r\n\r\nspec = APISpec(title=\"Pets\", version=\"0.1\", openapi_version=\"3.1.0\")\r\nconverter = OpenAPIConverter(\r\n    openapi_version=\"3.1.0\", schema_name_resolver=None, spec=spec\r\n)\r\njson_schema = converter.schema2jsonschema(TestSchema)\r\ndata = {\"raw_field\": \"test\"}\r\nTestSchema().load(data)  # Works, as expected\r\njsonschema.validate(data, json_schema)  # Fails unexpectedly\r\n```\r\n\r\nThe output of printing the `json_schema` variable above is the following:\r\n```python\r\n{'type': 'object', 'properties': {'raw_field': {'type': ['null']}}}\r\n```\r\n\r\nIt appears the `FieldConverterMixin`'s `field2nullable` is appending `null` to the list of supported types for OAS 3.1.0, which makes sense in many cases, but when there's no pre-existing `type` value defined, the result is just `['null']`, which means that the field can only be `null`. This doesn't match the behaviour of the defined schema.\r\n\r\nI've implemented a workaround for this where I've overridden the `DEFAULT_FIELD_MAPPING` for `marshmallow.fields.Raw` to map to all supported JSON types (`[\"boolean\", \"object\", \"array\", \"number\", \"string\"]`), but it's a bit of a hack, and would be nice if the library could support this a bit better.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 3058
+  },
+  "source_repo": "swesmith/marshmallow-code__apispec.8b421526",
+  "source_split": "train",
+  "task_uid": "smith:marshmallow-code__apispec.8b421526.pr_961",
+  "upstream_repo": "marshmallow-code/apispec",
+  "version": null
+}

@@ -18,6 +18,20 @@ eval-suite/results/*
 !eval-suite/results/.gitkeep
 eval-suite/swebench/results/
 
+# experiment run artifacts: generation dumps, grades, analysis reports, plots,
+# checkpoints. May quote real prompts/model output; phase1_router/results alone
+# is ~1GB. Keep the experiment CODE (experiments/<name>/*.py), not the output.
+experiments/*/results/
+
+# campaign output under results/ (SWE-bench fan-out / matched-matrix runs, and
+# stray scratch dirs). The small committed results/*.csv measurement files stay.
+results/fanout-policy-pair/
+results/matched-matrix/
+results/Untitled/
+
+# scratch progress reports (regenerated, not source of truth — the wiki is)
+/PI-progress-report*.md
+
 # ---- python --------------------------------------------------------------
 __pycache__/
 *.py[cod]
@@ -41,6 +55,26 @@ logs/
 
 # ---- os ------------------------------------------------------------------
 .DS_Store
+
+# ---- new_datasets campaign: caches, vendored deps, DBs, scratch rounds ----
+# HF parquet cache (regenerable from TASK_SOURCE_LOCK.json).
+experiments/new_datasets/.task-source-cache/
+# Vendored clone of SWE-Bench-Fork -- has its own .git, not our source.
+experiments/new_datasets/*/_vendor/
+# Content-addressed artifact store + job-coordination DB (regenerable from
+# raw captures; same rationale as traces/ above -- may embed real prompts).
+experiments/new_datasets/artifacts/
+experiments/new_datasets/store.sqlite3
+experiments/new_datasets/*/store.sqlite3
+experiments/new_datasets/*/jobs.db/
+# Raw branch trajectory captures -- same sensitivity class as traces/ above.
+experiments/new_datasets/w4_branch/dataset_b_run/
+# Superseded scratch rounds from an earlier dedup/candidate-selection pass.
+eval-suite/swebench/instances_candidates_round2/
+eval-suite/swebench/instances_candidates_round3/
+eval-suite/swebench/instances_candidates_round3_broken/
+eval-suite/swebench/instances_candidates_verified/
+eval-suite/swebench/instances/_quarantine_broken_slug_round3/
 
 
 claude-memory

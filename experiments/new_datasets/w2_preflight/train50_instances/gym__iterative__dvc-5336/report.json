@@ -1,0 +1,34 @@
+{
+  "iterative__dvc-5336": {
+    "patch_is_None": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "resolved": false,
+    "tests_status": {
+      "FAIL_TO_PASS": {
+        "success": [],
+        "failure": [
+          "tests/unit/remote/test_local.py::test_protect_ignore_errors[1]",
+          "tests/unit/remote/test_local.py::test_protect_ignore_errors[13]"
+        ]
+      },
+      "PASS_TO_PASS": {
+        "success": [],
+        "failure": [
+          "tests/unit/remote/test_local.py::test_is_protected[symlink]",
+          "tests/unit/remote/test_local.py::test_protect_ignore_errors[30]",
+          "tests/unit/remote/test_local.py::test_status_download_optimization",
+          "tests/unit/remote/test_local.py::test_is_protected[hardlink]"
+        ]
+      },
+      "FAIL_TO_FAIL": {
+        "success": [],
+        "failure": []
+      },
+      "PASS_TO_FAIL": {
+        "success": [],
+        "failure": []
+      }
+    }
+  }
+}

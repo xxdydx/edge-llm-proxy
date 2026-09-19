@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "h11/_receivebuffer.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 18,
+  "image_name": "swebench/swesmith.x86_64.python-hyper_1776_h11.bed0dd4a",
+  "instance_id": "python-hyper__h11.bed0dd4a.func_pm_class_rm_funcs__q4g7esce",
+  "mutation_locations": [
+    "h11/_receivebuffer.py|class ReceiveBuffer:"
+  ],
+  "pass_to_pass_count": 58,
+  "patch_sha256": "b212aee19cd2464306a948cd8aab117db9ee7014a1fc830f181573a64afb0656",
+  "problem_sha256": "68ab9f0b44bf2fcc86abc1504ac6e2db8cef36a398a492a5db9206648a59a6b5",
+  "problem_statement": "ReceiveBuffer missing maybe_extract_at_most method breaks HTTP parsing\n\n#### Description\n\nAfter a recent change, the `ReceiveBuffer` class is missing the `maybe_extract_at_most` method, which causes HTTP parsing to fail with AttributeError when trying to read fixed-length content.\n\n#### Steps/Code to Reproduce\n\n```python\nimport h11\n\n# Create a simple HTTP/1.1 request with content-length\nc = h11.Connection(h11.CLIENT)\nc.send(h11.Request(method='POST', target='/', headers=[('Host', 'example.com'), ('Content-Length', '5')]))\nc.send(h11.Data(data=b'hello'))\nc.send(h11.EndOfMessage())\n\n# Try to parse the response\nserver = h11.Connection(h11.SERVER)\nserver.receive_data(c.data_to_send())\nevents = []\nwhile True:\n    event = server.next_event()\n    if event is h11.NEED_DATA:\n        break\n    events.append(event)\n```\n\nThis will raise an AttributeError about the missing `maybe_extract_at_most` method when the HTTP parser tries to read content with a fixed Content-Length.\n\nThe error also occurs when parsing chunked transfer encoding or any scenario where the HTTP parser needs to extract a specific number of bytes from the receive buffer.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00010-of-00011.parquet",
+    "parquet_sha256": "3b7c09dfa07209f550f210344caac267c2ac5ea9c6eefa84c67845ecdff0b6df",
+    "row_index_in_file": 2680
+  },
+  "source_repo": "swesmith/python-hyper__h11.bed0dd4a",
+  "source_split": "train",
+  "task_uid": "smith:python-hyper__h11.bed0dd4a.func_pm_class_rm_funcs__q4g7esce",
+  "upstream_repo": "python-hyper/h11",
+  "version": null
+}

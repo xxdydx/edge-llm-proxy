@@ -4,7 +4,8 @@ metadata:
   name: arul-edge-client-dev
   annotations:
     description: Development environment for the edge LLM client project
-
+    schedule_hint:
+      selected_worker: wkr-4
 spec:
   taskType: ssh
   interactive: true
@@ -25,6 +26,9 @@ spec:
         count: 1
       cpu: 8
       memory: 32Gi
+  # Platform hard-caps the actual lease at 8h regardless of what's requested
+  # here (confirmed 2026-09-06 — a 43200s/12h request was torn down at
+  # exactly 28800s/8h). Set to the real ceiling so this isn't misleading.
   ttlSeconds: 28800
   accessMode: proxy
   output:

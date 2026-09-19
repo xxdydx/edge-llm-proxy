@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "parse.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 2,
+  "image_name": "swebench/swesmith.x86_64.r1chardj0n3s_1776_parse.30da9e4f",
+  "instance_id": "r1chardj0n3s__parse.30da9e4f.func_basic__0i1oecyo",
+  "mutation_locations": [
+    "parse.py|class Parser(object):"
+  ],
+  "pass_to_pass_count": 96,
+  "patch_sha256": "e3e0d606ba0e70b652c11db3cd758bc64d376d5602e7ffc2853dfff65de9b26b",
+  "problem_sha256": "6e090ff075fa69d984b10c95c08a1003071941300dd76f386b9061d390206827",
+  "problem_statement": "Parser.named_fields returns incomplete list when field names contain hyphens\n\n#### Description\n\nWhen using field names with hyphens in parse templates, the `named_fields` property returns an incomplete list that's missing the last field name.\n\n#### Steps/Code to Reproduce\n\n```python\nimport parse\n\ntemplate = '/local/sub/{user-id}/duration'\nparser = parse.Parser(template)\nprint(\"Named fields:\", parser.named_fields)\nprint(\"Expected:\", ['user_id'])\n\n# Also affects templates with multiple hyphenated fields\ntemplate2 = '/foo/{user-id}/{user_id}/{user.id}/bar/'\nparser2 = parse.Parser(template2)\nprint(\"Named fields:\", parser2.named_fields)\nprint(\"Expected:\", ['user_id', 'user__id', 'user___id'])\n```\n\nThe `named_fields` property should return all field names but currently returns an incomplete list when hyphens are present in field names.",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00008-of-00011.parquet",
+    "parquet_sha256": "b861958c450293ee717c00659958d2f334a697edf804f33c10c75bd05b8787e7",
+    "row_index_in_file": 3817
+  },
+  "source_repo": "swesmith/r1chardj0n3s__parse.30da9e4f",
+  "source_split": "train",
+  "task_uid": "smith:r1chardj0n3s__parse.30da9e4f.func_basic__0i1oecyo",
+  "upstream_repo": "r1chardj0n3s/parse",
+  "version": null
+}

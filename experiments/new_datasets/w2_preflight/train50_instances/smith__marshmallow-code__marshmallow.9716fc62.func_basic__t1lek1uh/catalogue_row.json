@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "src/marshmallow/utils.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 3,
+  "image_name": "swebench/swesmith.x86_64.marshmallow-code_1776_marshmallow.9716fc62",
+  "instance_id": "marshmallow-code__marshmallow.9716fc62.func_basic__t1lek1uh",
+  "mutation_locations": [
+    "src/marshmallow/utils.py|def get_value(obj, key: int | str, default=missing):"
+  ],
+  "pass_to_pass_count": 1185,
+  "patch_sha256": "41f65ccd0d4f95532cee7a8d7e7fab63451c0b5e21bfe1280671743a6e35571e",
+  "problem_sha256": "2fbd3c26974d1080ed49ccd2684effe41222d2d7d0be12983c117955e3e51f62",
+  "problem_statement": "Nested attribute access fails with empty keys list\n\n#### Description\n\nWhen using nested attribute access with marshmallow's `get_value` utility function, passing an empty keys list causes unexpected behavior. The function should handle edge cases properly but currently fails when the keys list is empty.\n\n#### Steps/Code to Reproduce\n\n```python\nfrom marshmallow import utils\n\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\nclass Triangle:\n    def __init__(self, p1, p2, p3):\n        self.p1 = p1\n        self.p2 = p2\n        self.p3 = p3\n\n# This should work but doesn't\ntri = Triangle(Point(1, 2), Point(3, 4), {'x': 5, 'y': 6})\nresult = utils.get_value(tri, 'p1.x')\nprint(f\"Expected: 1, Got: {result}\")\n```\n\nThe nested attribute access is not working correctly and returns `<marshmallow.missing>` instead of the expected value `1`.\n\nThis also affects schema serialization/deserialization when using nested attributes:\n\n```python\nfrom marshmallow import Schema, fields\n\nclass MySchema(Schema):\n    foo = fields.Field(attribute='bar.baz')\n\nschema = MySchema()\n# This works fine\ndump_data = schema.dump({'bar': {'baz': 42}})\nprint(f\"Dump result: {dump_data}\")  # Should be {'foo': 42}\n\n# But this doesn't work as expected\nload_data = schema.load({'foo': 42})\nprint(f\"Load result: {load_data}\")  # Should be {'bar': {'baz': 42}} but returns {}\n```",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00005-of-00011.parquet",
+    "parquet_sha256": "517420b48132eda3c073e6b9bc5fecbaf34c3dea7f3fec49a46f8615584f8200",
+    "row_index_in_file": 979
+  },
+  "source_repo": "swesmith/marshmallow-code__marshmallow.9716fc62",
+  "source_split": "train",
+  "task_uid": "smith:marshmallow-code__marshmallow.9716fc62.func_basic__t1lek1uh",
+  "upstream_repo": "marshmallow-code/marshmallow",
+  "version": null
+}

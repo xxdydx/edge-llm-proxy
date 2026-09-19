@@ -313,7 +313,7 @@ inference accuracy/false-cohort rate—not as a routing input.
 The trace graph sidecar and Mermaid renderer are the first implementation
 layer. Their parent/sibling edges distinguish structural prefix overlap,
 prospective cache state, and realised reuse. Cohort detection is initially
-observe-only with a 200 ms recorded window and zero actual wait. Before enabling
+observe-only with a 300 ms recorded window and zero actual wait. Before enabling
 admission delay, fit the window from a larger arrival distribution and charge
 the entire wait to every latency number.
 

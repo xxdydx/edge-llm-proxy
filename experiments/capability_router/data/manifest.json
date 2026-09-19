@@ -1,0 +1,21 @@
+{
+  "seed": 20260909,
+  "target_examples": 120,
+  "selected_count": 120,
+  "task_group_counts": {
+    "swebench-ansible-395e5e20": 10,
+    "swebench-ansible-39bd8b99": 10,
+    "swebench-ansible-5e88cd99": 10,
+    "swebench-ansible-b5e02936": 10,
+    "swebench-ansible-d58e69c8": 10,
+    "swebench-openlibrary-1be7de78": 10,
+    "swebench-openlibrary-5fb31263": 10,
+    "swebench-openlibrary-6fdbbeee": 10,
+    "swebench-openlibrary-798a5825": 10,
+    "swebench-openlibrary-c05ccf2c": 10,
+    "swebench-qutebrowser-5fdc83e5": 10,
+    "swebench-qutebrowser-e64622cd": 10
+  },
+  "excluded_dirs": [],
+  "dedup_dropped": 119
+}

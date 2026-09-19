@@ -1,0 +1,32 @@
+{
+  "base_commit": null,
+  "changed_files": [
+    "arrow/arrow.py"
+  ],
+  "dataset_id": "SWE-bench/SWE-smith-py",
+  "dataset_revision": "77cab9055d42ab4a5c25c89a8f937096db13558e",
+  "fail_to_pass_count": 4,
+  "image_name": "swebench/swesmith.x86_64.arrow-py_1776_arrow.1d70d009",
+  "instance_id": "arrow-py__arrow.1d70d009.func_pm_remove_assign__cru2kv8m",
+  "mutation_locations": [
+    "arrow/arrow.py|class Arrow:"
+  ],
+  "pass_to_pass_count": 1848,
+  "patch_sha256": "ab265c198e84bbe40d7be181fbf306e38d5fac5afed9ae8582fc390ac065246e",
+  "problem_sha256": "010dfcebbeb218e0acdd916f52266a800b05aba330cce1cc41de7eb6cf7129ad",
+  "problem_statement": "[Bug]: is_between method broken for all bound types\n\n### Bug summary\n\nIn the latest version, the `is_between` method is broken for all bound types. When trying to check if a date is between two other dates, it fails with a `NameError` because the `include_end` variable is not defined.\n\n### Code for reproduction\n\n```python\nimport arrow\n\ntarget = arrow.Arrow.fromdatetime(datetime(2013, 5, 5, 12, 30, 27))\nstart = arrow.Arrow.fromdatetime(datetime(2013, 5, 5, 12, 30, 10))\nend = arrow.Arrow.fromdatetime(datetime(2013, 5, 5, 12, 30, 36))\n\n# This should return True but raises an error instead\nresult = target.is_between(start, end, '()')\n```\n\n### Actual outcome\n\n```\nNameError: name 'include_end' is not defined\n```\n\n### Expected outcome\n\nThe method should correctly determine if the target date is between the start and end dates according to the specified bounds. For example:\n\n- With `()` bounds, it should return `True` if the target is strictly between start and end\n- With `[]` bounds, it should return `True` if the target is between start and end, inclusive\n- With `[)` bounds, it should include the start date but exclude the end date\n- With `(]` bounds, it should exclude the start date but include the end date\n\n### Additional information\n\nThis affects all bound types (`()`, `[]`, `[)`, `(]`), making the `is_between` method completely unusable.\n\n### Operating system\n\nLinux\n\n### Python version\n\n3.10.15",
+  "runtime_preflight_status": "not_run",
+  "selected_using_model_outcome": false,
+  "setup_semantics": "apply_official_bug_patch_or_task_branch",
+  "source_key": "smith",
+  "source_locator": {
+    "parquet_file": "data/train-00005-of-00011.parquet",
+    "parquet_sha256": "517420b48132eda3c073e6b9bc5fecbaf34c3dea7f3fec49a46f8615584f8200",
+    "row_index_in_file": 3876
+  },
+  "source_repo": "swesmith/arrow-py__arrow.1d70d009",
+  "source_split": "train",
+  "task_uid": "smith:arrow-py__arrow.1d70d009.func_pm_remove_assign__cru2kv8m",
+  "upstream_repo": "arrow-py/arrow",
+  "version": null
+}

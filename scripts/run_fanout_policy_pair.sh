@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the same read-only Claude Code fan-out workload through isolated
-# cloud-only and static-policy edgeproxy instances.
+# cloud-only, static-policy, cohort-aware, and cache-isolated edgeproxy
+# instances.
 #
 # Run this on the GPU dev box after bootstrap has started vLLM. It starts its
 # own proxies and never touches the bootstrap-managed proxy on port 8000.
@@ -34,9 +35,15 @@ result_root="${RESULT_ROOT:-$repo_dir/results/fanout-policy-pair}"
 # but a previous interrupted run must never be mistaken for this run.
 cloud_port="${CLOUD_PROXY_PORT:-}"
 static_port="${STATIC_PROXY_PORT:-}"
+cohort_port="${COHORT_PROXY_PORT:-}"
+ablation_port="${ABLATION_PROXY_PORT:-}"
 run_mode="${RUN_MODE:-concurrent}"
 run_condition_selection="${RUN_CONDITION:-pair}"
-run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+dry_run=false
+routing_cache_salt_scope=off
+# The process ID prevents collisions even when repeated trials start in the same UTC
+# second.  It also keeps every default experiment/episode ID unique.
+run_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 experiment_id="${EXPERIMENT_ID:-fanout-$run_stamp}"
 
 prompt='Your working directory is the edgeproxy/ directory. Explore only this directory and its descendants. Do not access, read, modify, or mention its parent directory or any sibling directory. Launch five read-only subagents concurrently, covering: (1) routing, (2) request handling, (3) cache and trace logic, (4) telemetry/config/timing/shaping/cost, and (5) tests and testability. Use foreground Agent tool calls: emit the independent Agent calls together so they run in parallel, do not set run_in_background, and do not return while any agent is pending. Do not write files, install packages, run network commands, or commit anything. After every agent result has arrived, return one detailed consolidated Markdown report. Start the report with this exact line: <!-- FANOUT_REPORT_START -->. Then use these exact level-two headings in this order: Executive Summary; Findings from Each Agent; Architecture and Request Data Flow; Risks; Testing Gaps; Disagreements or Overlaps Between Agents; Open Questions. Do not return a launch/progress/waiting message. End the completed report with this exact line: <!-- FANOUT_REPORT_COMPLETE -->'
@@ -98,6 +105,13 @@ start_proxy() {
   local trace_dir="$4"
   local log_path="$5"
   local episode_id="$6"
+  local cohort_parent_placement="$7"
+  local local_cache_salt_scope="$8"
+  local extra_args=()
+
+  if [ "$cohort_parent_placement" = "true" ]; then
+    extra_args+=(--cohort-parent-placement)
+  fi
 
   mkdir -p "$trace_dir"
   "$python_bin" -m edgeproxy.server \
@@ -109,14 +123,17 @@ start_proxy() {
     --experiment-id "$experiment_id" \
     --episode-id "$episode_id" \
     --cohort-tracking observe \
-    --cohort-window-ms "${EDGEPROXY_COHORT_WINDOW_MS:-200}" \
+    --cohort-window-ms "${EDGEPROXY_COHORT_WINDOW_MS:-300}" \
+    --cohort-barrier-timeout-ms "${EDGEPROXY_COHORT_BARRIER_TIMEOUT_MS:-5000}" \
     --policy "$policy" \
     --local-cache-tracking observe \
+    --local-cache-salt-scope "$local_cache_salt_scope" \
     --cloud-cache-tracking observe \
     --max-local-tokens "${EDGEPROXY_MAX_LOCAL_TOKENS:-100000}" \
     --local-token-margin "${EDGEPROXY_LOCAL_TOKEN_MARGIN:-0.90}" \
     --local-output-reserve-tokens "${EDGEPROXY_LOCAL_OUTPUT_RESERVE_TOKENS:-0}" \
     --shaping none \
+    "${extra_args[@]+"${extra_args[@]}"}" \
     >"$log_path" 2>&1 &
   started_proxy_pid=$!
 
@@ -136,6 +153,65 @@ wait_for_trace() {
     sleep 0.2
   done
   return 1
+}
+
+validate_condition_trace() {
+  local label="$1"
+  local trace_path="$2"
+  [ "$label" = "cohort" ] || [ "$label" = "ablation" ] || return 0
+
+  "$python_bin" - "$label" "$trace_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+label, trace_arg = sys.argv[1:]
+rows = [json.loads(line) for line in Path(trace_arg).read_text().splitlines() if line]
+parents = [
+    row
+    for row in rows
+    if (row.get("cohort_parent_placement") or {}).get("outcome") == "true_positive"
+]
+if not parents:
+    raise SystemExit(f"{label}: no true-positive cohort parent-placement signal")
+
+dispatches = [row.get("cohort_dispatch") for row in rows if row.get("cohort_dispatch")]
+roles = [dispatch.get("role") for dispatch in dispatches]
+if roles.count("leader") < 1 or roles.count("follower") < 4:
+    raise SystemExit(
+        f"{label}: cohort coordinator did not engage for a five-child wave: {roles}"
+    )
+
+local_rows = [row for row in rows if row.get("placement") == "local"]
+salts = [(row.get("request") or {}).get("cache_salt") for row in local_rows]
+if not salts or any(not salt for salt in salts):
+    raise SystemExit(f"{label}: local requests are missing cache_salt")
+
+expected_scope = "condition" if label == "cohort" else "request"
+if any(row.get("local_cache_salt_scope") != expected_scope for row in rows):
+    raise SystemExit(f"{label}: trace does not record salt scope {expected_scope}")
+if label == "cohort" and len(set(salts)) != 1:
+    raise SystemExit("cohort: local requests did not share one cache namespace")
+if label == "ablation":
+    if len(set(salts)) != len(salts):
+        raise SystemExit("ablation: local request cache namespaces were reused")
+    warm_releases = [
+        dispatch
+        for dispatch in dispatches
+        if dispatch.get("role") == "follower"
+        and dispatch.get("release_reason") == "cache-warm-confirmed"
+    ]
+    if warm_releases:
+        raise SystemExit(
+            "ablation: follower observed a different request's salted cache; "
+            "the patched probe may not honor cache_salt"
+        )
+
+print(
+    f"validated {label}: parents={len(parents)} leaders={roles.count('leader')} "
+    f"followers={roles.count('follower')} local_namespaces={len(set(salts))}"
+)
+PY
 }
 
 validate_report() {
@@ -177,6 +253,8 @@ run_condition() (
   local label="$1"
   local policy="$2"
   local port="$3"
+  local cohort_parent_placement="$4"
+  local local_cache_salt_scope="$5"
   local trace_dir="$trace_root/$label-$run_stamp"
   local proxy_log="$result_root/${label}_proxy_${run_stamp}.log"
   local claude_log="$result_root/${label}_claude_${run_stamp}.md"
@@ -191,6 +269,13 @@ run_condition() (
   local claude_session_id
   local pid=""
 
+  if [ "$dry_run" = "true" ]; then
+    local parent_flag=""
+    [ "$cohort_parent_placement" = "true" ] && parent_flag=" --cohort-parent-placement"
+    echo "condition=$label: --policy $policy --cohort-tracking observe --cohort-window-ms ${EDGEPROXY_COHORT_WINDOW_MS:-300} --cohort-barrier-timeout-ms ${EDGEPROXY_COHORT_BARRIER_TIMEOUT_MS:-5000} --local-cache-tracking observe --local-cache-salt-scope $local_cache_salt_scope${parent_flag}"
+    return 0
+  fi
+
   claude_session_id="$("$python_bin" -c 'import uuid; print(uuid.uuid4())')"
 
   cleanup_condition() {
@@ -202,7 +287,8 @@ run_condition() (
 
   echo "==> starting $label proxy ($policy) on :$port"
   if ! start_proxy \
-    "$label" "$policy" "$port" "$trace_dir" "$proxy_log" "$episode_id"; then
+    "$label" "$policy" "$port" "$trace_dir" "$proxy_log" "$episode_id" \
+    "$cohort_parent_placement" "$local_cache_salt_scope"; then
     tail -40 "$proxy_log" >&2 || true
     die "$label edgeproxy did not become healthy"
   fi
@@ -248,6 +334,7 @@ run_condition() (
   fi
   cp "$trace_source" "$trace_dest"
   echo "==> saved $label trace: $trace_dest"
+  validate_condition_trace "$label" "$trace_dest"
 
   "$python_bin" -m edgeproxy.trace.graph "$trace_dest" \
     --claude-stream "$claude_stream" \
@@ -265,12 +352,14 @@ run_condition() (
 usage() {
   cat <<'EOF'
 Usage: run_fanout_policy_pair.sh [--mode concurrent|sequential]
-                                  [--condition pair|cloud|routing]
+                                  [--condition pair|all|cloud|routing|cohort|ablation]
+                                  [--dry-run]
 
 Runs the cloud-only and static-policy conditions with the same read-only
-Claude Code fan-out prompt. Default mode is concurrent. Set RUN_MODE or pass
---mode sequential to avoid overlap between the two Claude Code processes.
-Use --condition routing for a single static-policy validation run.
+Claude Code fan-out prompt. `all` adds cohort-aware placement and its
+per-request cache-namespaced ablation. In concurrent `all` mode, cloud runs in
+parallel while the three vLLM-using conditions remain sequential so they do
+not contend with each other. `pair` preserves the original two-condition run.
 EOF
 }
 
@@ -282,9 +371,13 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --condition)
-      [ "$#" -ge 2 ] || die "--condition requires pair, cloud, or routing"
+      [ "$#" -ge 2 ] || die "--condition requires a selection"
       run_condition_selection="$2"
       shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
       ;;
     --help|-h)
       usage
@@ -301,9 +394,33 @@ case "$run_mode" in
   *) die "--mode must be concurrent or sequential, got: $run_mode" ;;
 esac
 case "$run_condition_selection" in
-  pair|cloud|routing) ;;
-  *) die "--condition must be pair, cloud, or routing, got: $run_condition_selection" ;;
+  pair|all|cloud|routing|cohort|ablation) ;;
+  *) die "--condition must be pair, all, cloud, routing, cohort, or ablation, got: $run_condition_selection" ;;
 esac
+
+run_named_condition() {
+  case "$1" in
+    cloud) run_condition cloud cloud-only "$cloud_port" false off ;;
+    routing) run_condition routing static "$static_port" false "$routing_cache_salt_scope" ;;
+    cohort) run_condition cohort static "$cohort_port" true condition ;;
+    ablation) run_condition ablation static "$ablation_port" true request ;;
+    *) die "internal error: unknown condition: $1" ;;
+  esac
+}
+
+if [ "$dry_run" = "true" ]; then
+  cloud_port="${cloud_port:-18081}"
+  static_port="${static_port:-18082}"
+  cohort_port="${cohort_port:-18083}"
+  ablation_port="${ablation_port:-18084}"
+  [ "$run_condition_selection" = "all" ] && routing_cache_salt_scope=condition
+  case "$run_condition_selection" in
+    pair) run_named_condition cloud; run_named_condition routing ;;
+    all) for condition in cloud routing cohort ablation; do run_named_condition "$condition"; done ;;
+    *) run_named_condition "$run_condition_selection" ;;
+  esac
+  exit 0
+fi
 
 [ -d "$repo_dir/edgeproxy" ] || die "expected edgeproxy/ under $repo_dir"
 [ -x "$python_bin" ] || die "Python not executable: $python_bin"
@@ -316,9 +433,18 @@ cd "$repo_dir"
 
 [ -n "$cloud_port" ] || cloud_port="$(free_port)"
 [ -n "$static_port" ] || static_port="$(free_port)"
-[ "$cloud_port" != "$static_port" ] || die "cloud and static proxy ports must differ"
+[ -n "$cohort_port" ] || cohort_port="$(free_port)"
+[ -n "$ablation_port" ] || ablation_port="$(free_port)"
+ports=("$cloud_port" "$static_port" "$cohort_port" "$ablation_port")
+for ((i = 0; i < ${#ports[@]}; i++)); do
+  for ((j = i + 1; j < ${#ports[@]}; j++)); do
+    [ "${ports[$i]}" != "${ports[$j]}" ] || die "proxy ports must be distinct"
+  done
+done
 
 mkdir -p "$trace_root" "$result_root"
+
+[ "$run_condition_selection" = "all" ] && routing_cache_salt_scope=condition
 
 echo "==> repo:    $repo_dir"
 echo "==> vLLM:    $vllm_url"
@@ -328,16 +454,20 @@ echo "==> run:     $run_stamp"
 echo "==> experiment: $experiment_id"
 echo "==> mode:    $run_mode"
 echo "==> condition: $run_condition_selection"
-echo "==> ports:   cloud=$cloud_port routing=$static_port"
+echo "==> ports:   cloud=$cloud_port routing=$static_port cohort=$cohort_port ablation=$ablation_port"
 
 if [ "$run_condition_selection" = "cloud" ]; then
-  run_condition cloud cloud-only "$cloud_port"
+  run_named_condition cloud
 elif [ "$run_condition_selection" = "routing" ]; then
-  run_condition routing static "$static_port"
-elif [ "$run_mode" = "concurrent" ]; then
-  run_condition cloud cloud-only "$cloud_port" &
+  run_named_condition routing
+elif [ "$run_condition_selection" = "cohort" ]; then
+  run_named_condition cohort
+elif [ "$run_condition_selection" = "ablation" ]; then
+  run_named_condition ablation
+elif [ "$run_condition_selection" = "pair" ] && [ "$run_mode" = "concurrent" ]; then
+  run_named_condition cloud &
   cloud_run_pid=$!
-  run_condition routing static "$static_port" &
+  run_named_condition routing &
   static_run_pid=$!
 
   set +e
@@ -351,9 +481,28 @@ elif [ "$run_mode" = "concurrent" ]; then
 
   [ "$cloud_status" -eq 0 ] || die "cloud condition failed ($cloud_status)"
   [ "$static_status" -eq 0 ] || die "routing condition failed ($static_status)"
+elif [ "$run_condition_selection" = "all" ] && [ "$run_mode" = "concurrent" ]; then
+  # Only cloud is independent of vLLM. Keep routing/cohort/ablation sequential
+  # so the live comparison is not confounded by cross-condition GPU contention.
+  run_named_condition cloud &
+  cloud_run_pid=$!
+  run_named_condition routing
+  run_named_condition cohort
+  run_named_condition ablation
+  set +e
+  wait "$cloud_run_pid"
+  cloud_status=$?
+  set -e
+  cloud_run_pid=""
+  [ "$cloud_status" -eq 0 ] || die "cloud condition failed ($cloud_status)"
+elif [ "$run_condition_selection" = "pair" ]; then
+  run_named_condition cloud
+  run_named_condition routing
 else
-  run_condition cloud cloud-only "$cloud_port"
-  run_condition routing static "$static_port"
+  run_named_condition cloud
+  run_named_condition routing
+  run_named_condition cohort
+  run_named_condition ablation
 fi
 
 echo "==> complete"

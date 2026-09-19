@@ -1,0 +1,28 @@
+{
+  "instance_id": "sympy__sympy-24443",
+  "repo": "sympy/sympy",
+  "repo_dir": "/testbed",
+  "docker_image": "swebench/sweb.eval.x86_64.sympy_1776_sympy-24443:latest",
+  "base_commit": "809c53c077485ca48a206cee78340389cb83b7f1",
+  "before_repo_set_cmd": null,
+  "problem_statement": "`_check_homomorphism` is broken on PermutationGroups\n```python\r\nIn [1]: from sympy.combinatorics import *\r\n   ...: from sympy.combinatorics.homomorphisms import homomorphism\r\n   ...: D3 = DihedralGroup(3)\r\n   ...: T = homomorphism(D3, D3, D3.generators, D3.generators)\r\n\r\nValueError: The given images do not define a homomorphism\r\n```\r\n\r\nThe issue is in the internal `_image()` function, where it handles the case of a `PermutationGroup`:\r\n\r\nhttps://github.com/sympy/sympy/blob/809c53c077485ca48a206cee78340389cb83b7f1/sympy/combinatorics/homomorphisms.py#L336-L337\r\n\r\nWhen `r[i]` is an inverted generator, the `in gens` test fails.\r\n\r\nI think the whole thing can be greatly simplified.\n",
+  "fail_to_pass": [
+    "test_homomorphism"
+  ],
+  "pass_to_pass": [
+    "test_isomorphisms"
+  ],
+  "issue_categories": [],
+  "repo_language": "python",
+  "difficulty_rank": "15 min - 1 hour",
+  "n_files_changed": null,
+  "patch_len_chars": 2511,
+  "pytest_addopts_override": null,
+  "extra_env": {},
+  "version": "1.12",
+  "eval_script": "#!/bin/bash\nset -uxo pipefail\nsource /opt/miniconda3/bin/activate\nconda activate testbed\ncd /testbed\ngit config --global --add safe.directory /testbed\ncd /testbed\ngit status\ngit show\ngit -c core.fileMode=false diff 809c53c077485ca48a206cee78340389cb83b7f1\nsource /opt/miniconda3/bin/activate\nconda activate testbed\npython -m pip install -e .\ngit checkout 809c53c077485ca48a206cee78340389cb83b7f1 sympy/combinatorics/tests/test_homomorphisms.py\ngit apply -v - <<'EOF_114329324912'\ndiff --git a/sympy/combinatorics/tests/test_homomorphisms.py b/sympy/combinatorics/tests/test_homomorphisms.py\n--- a/sympy/combinatorics/tests/test_homomorphisms.py\n+++ b/sympy/combinatorics/tests/test_homomorphisms.py\n@@ -57,6 +57,11 @@ def test_homomorphism():\n     assert T.codomain == D\n     assert T(a*b) == p\n \n+    D3 = DihedralGroup(3)\n+    T = homomorphism(D3, D3, D3.generators, D3.generators)\n+    assert T.is_isomorphism()\n+\n+\n def test_isomorphisms():\n \n     F, a, b = free_group(\"a, b\")\n\nEOF_114329324912\n: '>>>>> Start Test Output'\nPYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose sympy/combinatorics/tests/test_homomorphisms.py\n: '>>>>> End Test Output'\ngit checkout 809c53c077485ca48a206cee78340389cb83b7f1 sympy/combinatorics/tests/test_homomorphisms.py\n",
+  "eval_type": "pass_and_fail",
+  "log_parser": "parse_log_sympy",
+  "source": "Pinned local SWE-bench Verified Arrow sha256:dac1b34d5d92454c90d41ac9876448ffd2585463a70b98b204da83034c3ccab6; official precomputed eval fields; gold source patch omitted",
+  "slug": "swebench-sympy-3b20aad08b"
+}
