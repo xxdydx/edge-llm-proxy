@@ -77,10 +77,19 @@ def ingest_run_dir(store: JobStore, run_dir: str, campaign_id: str = CAMPAIGN_ID
     session_cache_baseline = None
     for i, rec in enumerate(recs):
         call = rec.get("call") or {}
-        vllm_snapshot = (rec.get("local_resources") or {}).get("vllm")
-        if vllm_snapshot and session_cache_baseline is None:
-            session_cache_baseline = vllm_snapshot
-        session_cache = session_cache_progress(session_cache_baseline, vllm_snapshot)
+        local_resources = rec.get("local_resources") or {}
+        vllm_snapshot = local_resources.get("vllm")
+        # The edgeproxy itself has computed this live, correctly session-
+        # scoped, since the per-task cache fix (see edgeproxy/telemetry.py
+        # LocalBackendState._session_cache_progress) -- prefer that
+        # authoritative value. Older captures made before that fix don't
+        # have it, so fall back to re-deriving the same delta here from
+        # the raw cumulative counters (same logic, just after the fact).
+        session_cache = local_resources.get("session_prefix_cache")
+        if session_cache is None:
+            if vllm_snapshot and session_cache_baseline is None:
+                session_cache_baseline = vllm_snapshot
+            session_cache = session_cache_progress(session_cache_baseline, vllm_snapshot)
         request_raw = json.dumps(rec.get("request") or {}, sort_keys=True).encode()
         response_raw = json.dumps(rec.get("response") or {}, sort_keys=True).encode()
         req_art = store.put_artifact(request_raw)
