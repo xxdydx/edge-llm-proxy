@@ -16,10 +16,14 @@ applied. This produces one real container-executed trajectory per
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import random
+import shlex
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -104,39 +108,86 @@ def setup_container(name: str) -> None:
         raise RuntimeError(f"claude install failed: {install.stdout[-3000:]} {install.stderr[-3000:]}")
 
 
-def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: str, timeout_s: int) -> tuple[str, int | None, bool]:
-    stdin_line = json.dumps({
+def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: str, timeout_s: int,
+               out_path: Path) -> tuple[str, int | None, bool]:
+    # The token is supplied through stdin to a shell variable, never in argv
+    # -- an argv value is visible to any local `ps aux`, and (as happened
+    # once) gets printed verbatim into any TimeoutExpired traceback.
+    user_msg_line = json.dumps({
         "type": "user",
         "message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
         "parent_tool_use_id": None,
     }, ensure_ascii=False) + "\n"
-    env_flags = [
-        "-e", f"ANTHROPIC_BASE_URL={base_url}",
-        "-e", f"ANTHROPIC_AUTH_TOKEN={os.environ['ANTHROPIC_AUTH_TOKEN']}",
-        "-e", "HOME=/home/agent",
-    ]
+    env_flags = ["-e", f"ANTHROPIC_BASE_URL={base_url}", "-e", "HOME=/home/agent"]
     cmd = [
         "docker", "exec", "-i", "-u", "agent", "-w", "/testbed", *env_flags, name,
-        "claude", "-p", "--model", model, "--session-id", session_id,
-        "--dangerously-skip-permissions",
-        "--input-format", "stream-json", "--output-format", "stream-json",
-        "--replay-user-messages", "--verbose",
+        "bash", "-lc",
+        "read -r ANTHROPIC_AUTH_TOKEN; export ANTHROPIC_AUTH_TOKEN; exec claude -p "
+        f"--model {shlex.quote(model)} --session-id {shlex.quote(session_id)} "
+        "--dangerously-skip-permissions "
+        "--input-format stream-json --output-format stream-json "
+        "--replay-user-messages --verbose",
     ]
+    stdin_data = os.environ["ANTHROPIC_AUTH_TOKEN"] + "\n" + user_msg_line
     hard_timeout = timeout_s + CLAUDE_TIMEOUT_EXTRA_S
-    launched = time.monotonic()
+
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc.stdin.write(stdin_data)
+    proc.stdin.close()
+
+    # A real trajectory can run 20+ real turns before hitting the wall-clock
+    # budget -- that's expensive, genuine progress, not a stuck/empty run.
+    # communicate()'s in-memory buffering loses all of it if the process has
+    # to be killed and the docker-exec client itself then hangs past its own
+    # 30s teardown window (confirmed live: this happens on real, reproducible
+    # tasks). Stream to disk line by line as it arrives instead, so whatever
+    # was actually produced survives regardless of how the kill goes.
+    lines: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _drain_stdout() -> None:
+        with out_path.open("w") as f:
+            for line in proc.stdout:
+                lines.append(line)
+                f.write(line)
+                f.flush()
+
+    def _drain_stderr() -> None:
+        # A zombied docker-exec client (confirmed to happen: it can survive
+        # SIGKILL for well past 30s) never closes this pipe either, so an
+        # unbounded proc.stderr.read() here can hang indefinitely and defeat
+        # every timeout above it. Drain it the same bounded, threaded way.
+        for line in proc.stderr:
+            stderr_chunks.append(line)
+
+    stdout_reader = threading.Thread(target=_drain_stdout, daemon=True)
+    stderr_reader = threading.Thread(target=_drain_stderr, daemon=True)
+    stdout_reader.start()
+    stderr_reader.start()
+
     timed_out = False
     try:
-        stdout, stderr = proc.communicate(input=stdin_line, timeout=hard_timeout)
-        returncode = proc.returncode
+        returncode = proc.wait(timeout=hard_timeout)
+        stdout_reader.join(timeout=10)
+        stderr_reader.join(timeout=10)
     except subprocess.TimeoutExpired:
         timed_out = True
         proc.kill()
-        stdout, stderr = proc.communicate(timeout=10)
-        returncode = proc.returncode
+        try:
+            returncode = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            # The docker-exec client can outlive the killed in-container
+            # process if the daemon is slow to tear it down; don't let a
+            # second timeout crash the whole capture run over one task.
+            # Whatever was captured up to this point is already on disk.
+            returncode = None
+        stdout_reader.join(timeout=10)
+        stderr_reader.join(timeout=10)
+
+    stderr = "".join(stderr_chunks)
     if stderr:
         sys.stderr.write(f"[claude stderr for {name}]\n{stderr[-3000:]}\n")
-    return stdout, returncode, timed_out
+    return "".join(lines), returncode, timed_out
 
 
 def extract_patch(name: str) -> str:
@@ -170,7 +221,10 @@ def main() -> None:
         test_spec = make_test_spec(instance)
         image = f"sweb.eval.{test_spec.arch}.{iid}:latest"
 
-        for policy, cfg in POLICIES.items():
+        run_seed = int.from_bytes(hashlib.sha256(f"smoke-v1|order|{iid}|{time.time_ns()}".encode()).digest()[:8], "big")
+        order = list(POLICIES.items())
+        random.Random(run_seed).shuffle(order)
+        for policy, cfg in order:
             repeat_index = 0
             while (OUT_ROOT / f"{iid}__{policy}" if repeat_index == 0
                    else OUT_ROOT / f"{iid}__{policy}__r{repeat_index}").exists():
@@ -192,10 +246,10 @@ def main() -> None:
 
             t_claude_start = time.time()
             stdout, returncode, timed_out = run_claude(
-                name, prompt, cfg["base_url"], cfg["model"], session_id, MAX_ACTIVE_SECONDS
+                name, prompt, cfg["base_url"], cfg["model"], session_id, MAX_ACTIVE_SECONDS,
+                run_dir / "claude_stream.jsonl",
             )
             t_claude_end = time.time()
-            (run_dir / "claude_stream.jsonl").write_text(stdout)
 
             patch = extract_patch(name)
             (run_dir / "final_patch.diff").write_text(patch)
@@ -208,6 +262,7 @@ def main() -> None:
                 "run_dir": run_dir.name,
                 "repeat_index": repeat_index,
                 "session_id": session_id,
+                "execution_order": {"seed": run_seed, "policies_in_order": [p for p, _ in order]},
                 "container_setup_seconds": round(t_setup_done - t_container_start, 2),
                 "claude_wall_seconds": round(t_claude_end - t_claude_start, 2),
                 "claude_returncode": returncode,
