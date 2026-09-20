@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import mock_open, patch
 
-from edgeproxy.telemetry import _gpu_snapshot, parse_vllm_metrics, read_host_ram
+from edgeproxy.telemetry import LocalBackendState, _gpu_snapshot, parse_vllm_metrics, read_host_ram
 
 
 METRICS = '''
@@ -132,6 +132,65 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(parsed["total_gib"], 32.0)
         self.assertEqual(parsed["used_gib"], 8.0)
         self.assertEqual(parsed["used_pct"], 25.0)
+
+
+class LocalBackendStateSessionCacheTests(unittest.TestCase):
+    def test_no_session_id_skips_session_prefix_cache(self):
+        state = LocalBackendState(concurrency_limit=2)
+        snap = state.snapshot({"vllm": {"prefix_cache_hits_total": 10, "prefix_cache_queries_total": 20}})
+        self.assertNotIn("session_prefix_cache", snap)
+
+    def test_first_call_in_a_session_has_no_rate_yet(self):
+        state = LocalBackendState(concurrency_limit=2)
+        snap = state.snapshot(
+            {"vllm": {"prefix_cache_hits_total": 500, "prefix_cache_queries_total": 900,
+                      "prefix_cache_hit_fraction_lifetime": 0.7}},
+            session_id="s1",
+        )
+        sc = snap["session_prefix_cache"]
+        self.assertEqual(sc["session_hits_delta"], 0)
+        self.assertEqual(sc["session_queries_delta"], 0)
+        self.assertIsNone(sc["session_hit_rate_so_far"])
+        self.assertEqual(sc["lifetime_hit_rate_at_dispatch"], 0.7)
+
+    def test_second_call_reports_delta_since_session_start_not_lifetime(self):
+        state = LocalBackendState(concurrency_limit=2)
+        state.snapshot(
+            {"vllm": {"prefix_cache_hits_total": 500, "prefix_cache_queries_total": 900}},
+            session_id="s1",
+        )
+        snap = state.snapshot(
+            {"vllm": {"prefix_cache_hits_total": 550, "prefix_cache_queries_total": 950}},
+            session_id="s1",
+        )
+        sc = snap["session_prefix_cache"]
+        self.assertEqual(sc["session_hits_delta"], 50)
+        self.assertEqual(sc["session_queries_delta"], 50)
+        self.assertEqual(sc["session_hit_rate_so_far"], 1.0)
+
+    def test_different_sessions_do_not_share_a_baseline(self):
+        state = LocalBackendState(concurrency_limit=2)
+        state.snapshot(
+            {"vllm": {"prefix_cache_hits_total": 1000, "prefix_cache_queries_total": 2000}},
+            session_id="s1",
+        )
+        # A different session's first call must get its OWN fresh baseline
+        # (zero delta), not be compared against s1's counters.
+        snap = state.snapshot(
+            {"vllm": {"prefix_cache_hits_total": 1005, "prefix_cache_queries_total": 2010}},
+            session_id="s2",
+        )
+        sc = snap["session_prefix_cache"]
+        self.assertEqual(sc["session_hits_delta"], 0)
+        self.assertEqual(sc["session_queries_delta"], 0)
+
+    def test_missing_counters_are_none_not_zero(self):
+        state = LocalBackendState(concurrency_limit=2)
+        state.snapshot({"vllm": {"prefix_cache_hits_total": 10, "prefix_cache_queries_total": 20}}, session_id="s1")
+        snap = state.snapshot({"vllm": {"prefix_cache_hits_total": None, "prefix_cache_queries_total": None}}, session_id="s1")
+        sc = snap["session_prefix_cache"]
+        self.assertIsNone(sc["session_hits_delta"])
+        self.assertIsNone(sc["session_hit_rate_so_far"])
 
 
 if __name__ == "__main__":

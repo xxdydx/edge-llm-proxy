@@ -359,6 +359,10 @@ def make_app(cfg: Config) -> FastAPI:
         agentic_shadow_record: dict[str, Any] | None = None
         dispatch_ticket: DispatchTicket | None = None
         cohort_dispatch: dict[str, Any] | None = None
+        # Set for real inside the v1/messages branch below; pre-declared here
+        # so the fallback snapshot() call further down (which runs for any
+        # path, not just v1/messages) never sees an undefined name.
+        session: str | None = None
         if path.rstrip("/") == "v1/messages" and isinstance(request_json, dict):
             try:
                 if cfg.local_cache_salt_scope == "condition":
@@ -531,7 +535,7 @@ def make_app(cfg: Config) -> FastAPI:
                 # This is a synchronous cached read immediately before the
                 # placement decision: no metrics I/O is added to routing.
                 local_resources_at_decision = local_backend_state.snapshot(
-                    request.app.state.resource_sampler.snapshot()
+                    request.app.state.resource_sampler.snapshot(), session_id=session
                 )
                 decision = policy.decide(features)
                 placement, reason, detail = decision.placement, decision.reason, decision.detail
@@ -636,7 +640,7 @@ def make_app(cfg: Config) -> FastAPI:
 
         if local_resources_at_decision is None:
             local_resources_at_decision = local_backend_state.snapshot(
-                request.app.state.resource_sampler.snapshot()
+                request.app.state.resource_sampler.snapshot(), session_id=session
             )
 
         record: dict[str, Any] = {

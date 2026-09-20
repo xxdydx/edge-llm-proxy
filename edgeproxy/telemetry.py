@@ -85,10 +85,19 @@ class LocalBackendState:
     increment/decrement is also atomic with respect to asyncio tasks.
     """
 
+    _SESSION_CACHE_BASELINE_CAP = 10_000
+
     def __init__(self, *, concurrency_limit: int) -> None:
         self.concurrency_limit = concurrency_limit
         self._requests_in_flight = 0
         self._lock = threading.Lock()
+        # Per-session prefix-cache baseline (vLLM's own cumulative
+        # prefix_cache_hits_total/queries_total at that session's first
+        # observed request), so session_prefix_cache below can report a
+        # per-task hit rate alongside the lifetime one, not just the
+        # server-wide figure. Bounded to avoid unbounded growth on a
+        # long-running server; oldest entries evicted first.
+        self._session_cache_baseline: dict[str, dict[str, Any]] = {}
 
     @property
     def requests_in_flight(self) -> int:
@@ -107,12 +116,64 @@ class LocalBackendState:
                 raise RuntimeError("local request counter underflow")
             self._requests_in_flight -= 1
 
-    def snapshot(self, resources: dict[str, Any] | None) -> dict[str, Any]:
+    def snapshot(
+        self, resources: dict[str, Any] | None, session_id: str | None = None
+    ) -> dict[str, Any]:
         """Combine exact state with the sampler's last cached snapshot."""
         snapshot = dict(resources or {})
         snapshot["proxy_requests_in_flight"] = self.requests_in_flight
         snapshot["concurrency_limit"] = self.concurrency_limit
+        vllm = snapshot.get("vllm")
+        if session_id and isinstance(vllm, dict):
+            snapshot["session_prefix_cache"] = self._session_cache_progress(
+                session_id, vllm
+            )
         return snapshot
+
+    def _session_cache_progress(
+        self, session_id: str, vllm: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Per-task (per-session) prefix-cache hit rate: the delta of
+        vLLM's own cumulative hits/queries counters between this
+        session's first observed request and now. Isolates one session's
+        own cache reuse from the server-wide lifetime figure, which mixes
+        in every other session that ever hit this server."""
+        hits, queries = vllm.get("prefix_cache_hits_total"), vllm.get(
+            "prefix_cache_queries_total"
+        )
+        lifetime = vllm.get("prefix_cache_hit_fraction_lifetime")
+        with self._lock:
+            baseline = self._session_cache_baseline.get(session_id)
+            if baseline is None:
+                if len(self._session_cache_baseline) >= self._SESSION_CACHE_BASELINE_CAP:
+                    self._session_cache_baseline.pop(
+                        next(iter(self._session_cache_baseline))
+                    )
+                if hits is not None and queries is not None:
+                    self._session_cache_baseline[session_id] = {
+                        "hits": hits,
+                        "queries": queries,
+                    }
+                return {
+                    "session_hits_delta": 0,
+                    "session_queries_delta": 0,
+                    "session_hit_rate_so_far": None,
+                    "lifetime_hit_rate_at_dispatch": lifetime,
+                }
+        if hits is None or queries is None:
+            return {
+                "session_hits_delta": None,
+                "session_queries_delta": None,
+                "session_hit_rate_so_far": None,
+                "lifetime_hit_rate_at_dispatch": lifetime,
+            }
+        dh, dq = hits - baseline["hits"], queries - baseline["queries"]
+        return {
+            "session_hits_delta": dh,
+            "session_queries_delta": dq,
+            "session_hit_rate_so_far": (dh / dq) if dq > 0 else None,
+            "lifetime_hit_rate_at_dispatch": lifetime,
+        }
 
 
 class LocalRequestLease:
