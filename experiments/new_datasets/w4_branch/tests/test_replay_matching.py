@@ -31,6 +31,8 @@ import run_prospective_dataset_b as m  # noqa: E402
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TITLE_BODY = json.loads((FIXTURES / "title_gen_request.json").read_text())
 MAIN_BODY = json.loads((FIXTURES / "main_task_request.json").read_text())
+REAL_SUCCESS_REPORT = json.loads((FIXTURES / "grader_report_real_success.json").read_text())
+REAL_FAILURE_REPORT = json.loads((FIXTURES / "grader_report_real_failure.json").read_text())
 
 
 class _FakeRelay(BaseHTTPRequestHandler):
@@ -157,6 +159,96 @@ class ReplayRoutingIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotEqual(data, self.cached_title_reply)
         self.assertEqual(len(self.relay.received), 1)
+
+
+class ParseResolvedTests(unittest.TestCase):
+    """Grader-report parser: known-success, known-failure, and every
+    missing/malformed/wrong-task shape. Missing evidence must return None,
+    never silently False (acceptance review section 1)."""
+
+    def test_real_known_success(self):
+        self.assertIs(m.parse_resolved(REAL_SUCCESS_REPORT, "getmoto__moto-6178"), True)
+
+    def test_real_known_failure(self):
+        self.assertIs(m.parse_resolved(REAL_FAILURE_REPORT, "getmoto__moto-5752"), False)
+
+    def test_wrong_task_id_is_none_not_false(self):
+        # Real report, but asking about an instance_id that isn't in it.
+        self.assertIsNone(m.parse_resolved(REAL_SUCCESS_REPORT, "some__other-task-999"))
+
+    def test_missing_instance_key_is_none(self):
+        self.assertIsNone(m.parse_resolved({}, "getmoto__moto-5752"))
+
+    def test_malformed_report_not_a_dict_is_none(self):
+        self.assertIsNone(m.parse_resolved(None, "getmoto__moto-5752"))
+        self.assertIsNone(m.parse_resolved("not a report", "getmoto__moto-5752"))
+        self.assertIsNone(m.parse_resolved([], "getmoto__moto-5752"))
+
+    def test_malformed_entry_not_a_dict_is_none(self):
+        self.assertIsNone(m.parse_resolved({"getmoto__moto-5752": "oops"}, "getmoto__moto-5752"))
+
+    def test_malformed_resolved_field_wrong_type_is_none(self):
+        # e.g. a broken harness writes a string or null instead of a bool.
+        self.assertIsNone(m.parse_resolved({"getmoto__moto-5752": {"resolved": "true"}}, "getmoto__moto-5752"))
+        self.assertIsNone(m.parse_resolved({"getmoto__moto-5752": {"resolved": None}}, "getmoto__moto-5752"))
+        self.assertIsNone(m.parse_resolved({"getmoto__moto-5752": {}}, "getmoto__moto-5752"))
+
+
+def _make_branch(resolved, label_valid, termination_reason="completed"):
+    return m.Branch(
+        branch_id="b", initial_backend_fingerprint_id="x", initial_candidate_ref="artifact:x",
+        initial_invocation_id="inv", continuation_trajectory_ref="artifact:x", grader_ref="artifact:x",
+        final_patch_ref="artifact:x", final_patch_hash="x", resolved=resolved, label_valid=label_valid,
+        termination_reason=termination_reason, remaining_total_cost_usd=None, remaining_active_seconds=None,
+        input_usage={}, output_usage={}, cost_integrity="unknown",
+    )
+
+
+class ClassifyPairTests(unittest.TestCase):
+    """All 4 real outcome combinations plus missing/invalid evidence
+    (SONNET_MASTER_PROMPT.md acceptance review, section 1)."""
+
+    def test_both_pass(self):
+        edge = _make_branch(resolved=True, label_valid=True)
+        cloud = _make_branch(resolved=True, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (True, "BOTH_PASS"))
+
+    def test_both_fail_is_a_valid_result_not_incomplete(self):
+        edge = _make_branch(resolved=False, label_valid=True)
+        cloud = _make_branch(resolved=False, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (True, "BOTH_FAIL"))
+
+    def test_edge_only_pass(self):
+        edge = _make_branch(resolved=True, label_valid=True)
+        cloud = _make_branch(resolved=False, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (True, "EDGE_ONLY_PASS"))
+
+    def test_cloud_only_pass(self):
+        edge = _make_branch(resolved=False, label_valid=True)
+        cloud = _make_branch(resolved=True, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (True, "CLOUD_ONLY_PASS"))
+
+    def test_one_branch_crashed_is_invalid_not_both_fail(self):
+        edge = _make_branch(resolved=False, label_valid=False, termination_reason="adapter_error")
+        cloud = _make_branch(resolved=False, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (False, "INVALID"))
+
+    def test_missing_grade_evidence_is_invalid_even_with_empty_patch_alone(self):
+        # label_valid=False here must come from missing/unresolvable grade
+        # evidence, not from "patch was empty" by itself -- a real, complete
+        # run that genuinely produced no changes is BOTH_FAIL, not INVALID.
+        edge = _make_branch(resolved=None, label_valid=False)
+        cloud = _make_branch(resolved=False, label_valid=True)
+        self.assertEqual(m.classify_pair(edge, cloud), (False, "INVALID"))
+
+    def test_empty_patch_with_real_complete_evidence_is_not_invalid(self):
+        # A genuinely completed, gradable run with an empty/losing patch is
+        # a valid BOTH_FAIL, not invalidated by the empty patch alone.
+        edge = _make_branch(resolved=False, label_valid=True)
+        cloud = _make_branch(resolved=False, label_valid=True)
+        pair_valid, cls = m.classify_pair(edge, cloud)
+        self.assertTrue(pair_valid)
+        self.assertEqual(cls, "BOTH_FAIL")
 
 
 if __name__ == "__main__":

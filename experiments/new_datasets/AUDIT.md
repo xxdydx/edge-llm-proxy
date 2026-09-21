@@ -509,3 +509,567 @@ On independent verification this was premature:
    the rerun that only fixed routing but still hit the title-cache bug, row
    3: this one -- the first fully valid pair). Rows 1-2 preserved raw, not
    accepted.
+
+## 10. A/C spec gaps closed (2026-09-19)
+
+Two real, previously-undisclosed gaps against SONNET_MASTER_PROMPT.md section
+7, found while answering a direct question about whether A/C fully follow spec
+(they did not):
+
+1. **Execution order was never randomized.** `run_smoke_capture.py` always
+   ran edge before cloud (`for policy, cfg in POLICIES.items()`, dict
+   insertion order). Spec: "Randomise their execution order within resource
+   constraints and record it." Fixed: seeded per-instance shuffle
+   (`w3_capture/run_smoke_capture.py`), recorded as `execution_order:
+   {seed, policies_in_order}` in `run_meta.json` and carried into each A
+   row's `provenance`. Old captures (all of them so far) have no
+   `execution_order` field -- not backfilled, since they were genuinely
+   run edge-first every time; only new captures get real randomization.
+
+2. **`predecision_features` was always `{}`.** Spec wants real derived
+   features computed from pre-call information only. Implemented in the new
+   `w1_storage/features.py` (`extract_predecision_features`), computed
+   purely from each call's own request message history plus the immediately
+   preceding response's `stop_reason` -- never from anything after the
+   call: input-token estimate (heuristic `chars/4`, source declared
+   honestly, no real tokenizer available offline) and local headroom,
+   declared `max_tokens`, tool errors in the last 4 action/observation
+   cycles, total applied edits, up to the last 4 real test invocations
+   with outcome classified into `test_pass` /
+   `assertion_or_test_failure` / `test_execution_failure` / `unknown`,
+   same-failure-signature-before/after-edit flag, repeated
+   tool-name/argument-signature count over the last 4 cycles, and whether
+   the preceding response was truncated/invalid (`None` when there is no
+   preceding call at all, not conflated with "invalid"). Verified against
+   real captured trajectories, not synthetic fixtures: token estimates grow
+   sensibly across a real 27-call session (3147 to 23871), a real `pytest`
+   invocation's outcome was correctly classified as `test_pass`, and the
+   first-call edge case (`has_preceding_call=False`) was caught and fixed
+   (was incorrectly flagging "no prior call" as "prior call was invalid").
+   New canonical ingestion script at `w3_capture/ingest.py` (supersedes the
+   ad hoc `/tmp/ingest_smoke.py`/`ingest_r2.py`/`ingest_r5.py` scratch
+   scripts used earlier tonight) wires this in; verified end-to-end against
+   a scratch JobStore (not the real one, to avoid creating duplicate
+   `prefix_id`s against already-ingested data) -- 27/27 real rows, sensible
+   features throughout.
+
+**Not done:** existing ingested A rows (146 of them) still have empty
+`predecision_features` and no `execution_order` -- not retroactively
+mutated (append-only store; would need a full re-export to backfill, not
+attempted). Only *new* ingestion from here uses the fixed pipeline.
+
+## 11. Smoke stage — full state (2026-09-19)
+
+### Status: smoke stage complete for A/B/C. Do not proceed past it without the user's sign-off (SWE-smith architecture gap still open, see earlier sections).
+
+**Raw row counts:** A=171, B=7, C=234, preference_annotations=20.
+**Accepted (filtered, trustworthy) counts:** A=64, C=59 (stale -- predate
+tonight's 78-row addition, need regenerating), B=3, preferences=17.
+
+**B: 3 of 7 raw rows are genuinely valid** (`accepted/branch_outcomes.accepted.jsonl`,
+new this session). The other 4 have `pair_valid: true` stored but are
+provably broken -- one or both branches' `final_patch_hash` equals the
+SHA-256 of an empty string, a stale artifact of the wrong-model-routing and
+title-cache-collision bugs fixed earlier tonight (sections 9-10 above),
+written before the validity check itself was fixed. **Do not trust the raw
+`pair_valid` field alone for early rows** -- use the accepted file.
+
+### How each dataset is actually formed
+
+**A (`prefix_outcomes.jsonl`) -- one row per real API call in a trajectory.**
+1. Run Claude Code for real against a task, edge-only and cloud-only,
+   execution order now randomized and recorded.
+2. Every real `/v1/messages` call the edgeproxy sees is one row.
+3. Pick a core sample: up to 5 calls per trajectory, seeded random, no
+   replacement.
+4. Join the trajectory's final grade once known.
+5. Compute `predecision_features` from that call's own message history only
+   (never anything after it).
+Key fields: `trajectory_id`, `call_index`, `backend_fingerprint_id`,
+`predecision_request_ref` (artifact pointer to the real request),
+`predecision_features` (token estimate, tool-error/edit/test-outcome
+signals), `core_sample_selected`, `selection_probability`, `resolved`,
+`terminal_grade_ref`.
+
+**C (`serving_calls.jsonl`) -- one row per API call, timing/usage focus.**
+Same source calls as A, one-to-one, but about *how* the call performed
+rather than what was known beforehand.
+Key fields: `invocation_id`, `prefix_id` (joins back to A), `backend_fingerprint_id`,
+`raw_usage`, `usage_integrity`, `measured_timings`, `response_ref`,
+`measurement_quality_flags`.
+
+**B (`branch_outcomes.jsonl`) -- one row per checkpoint, forked two ways.**
+1. Run the task live; at every real (non-title-gen) call, run reservoir
+   sampling (Algorithm R) to pick one boundary uniformly at random from all
+   eligible ones seen.
+2. Certify it: from a clean container, replay every real prior exchange up
+   to that boundary (letting tools genuinely re-execute), verify the
+   resulting request and filesystem match the original (allowing only
+   proven non-semantic differences: per-container IDs, internal log
+   timestamps, pytest's own wall-clock duration).
+3. From the same clean state, fork: one branch's boundary call goes to
+   edge (Qwen), one to cloud (DeepSeek) -- both real, independent, live.
+4. Grade both patches independently.
+Key fields: `checkpoint_id`, `source_policy`, `edge_branch`/`cloud_branch`
+(each: `final_patch_hash`, `resolved`, `label_valid`, `continuation_trajectory_ref`),
+`pair_valid`, `observed_pair_class`.
+
+**Preference annotations (`preference_annotations.jsonl`) -- judge verdicts.**
+Sampled A prefixes get a shadow candidate generated from the other backend,
+both candidates shown to a judge in both orderings (order-swap), verdict
+aggregated per orientation into one label.
+Key fields: `aggregated_verdict` (CLOUD_PREFERRED/EDGE_PREFERRED/EQUIVALENT/
+BOTH_INADEQUATE/UNCERTAIN), `anonymization_violations`, `validity`.
+
+## 12. Acceptance review (2026-09-19) — verified against current code and artifacts
+
+Base commit: `20ed4e2` (already pushed). All fixes below are **uncommitted
+local changes** on top of it -- nothing new committed this round.
+Changed: `w4_branch/run_prospective_dataset_b.py`,
+`w4_branch/tests/test_replay_matching.py`, `w3_capture/run_smoke_capture.py`,
+new `w1_storage/features.py`, new `w3_capture/ingest.py`. Test output:
+`python3 -m unittest w4_branch.tests.test_replay_matching -v` → **14/14 OK**
+(7 new `ClassifyPairTests`, 7 pre-existing, all passing).
+
+### 1. B labels and validity -- CONFIRMED CODE DEFECT, FIXED
+
+- **Real defect A**: `Branch.resolved` was computed via
+  `tests_status.FAIL_TO_PASS.get("status") == "PASSED"` -- that `status` key
+  does not exist in the real grader report shape (confirmed by direct
+  inspection: `{"failure": [...], "success": [...]}`, no `status` key), so
+  `resolved` silently evaluated to `False` unconditionally. Checked all 14
+  branch instances across all 7 raw rows against the report's authoritative
+  top-level `resolved` field: **0 mismatches** -- every existing row's
+  `resolved` value happens to already be correct (all genuinely `False`), so
+  no historical data needed correcting, but the bug was live and would have
+  silently mislabeled the first future pair that actually resolved. Fixed:
+  `resolved = rep.get("resolved")` (authoritative field, not re-derived).
+- **Real defect B**: `observed_pair_class` was binary
+  (`BOTH_PASS`/`INCOMPLETE`), collapsing genuine valid negative results
+  (both branches really ran, really got graded, both `FAIL_TO_PASS` really
+  failed) into the same bucket as actually-broken rows. Fixed: added
+  `classify_pair()` (`BOTH_PASS`/`BOTH_FAIL`/`EDGE_ONLY_PASS`/
+  `CLOUD_ONLY_PASS`/`INVALID`), unit-tested for all 4 outcome combinations
+  plus the invalid case (`ClassifyPairTests`, 7 tests).
+- **Validity criterion, evidence-specific per your instruction (not "empty
+  patch alone")**: re-derived per-branch validity for all 7 historical rows
+  from real evidence (artifact resolvability + trajectory content), not the
+  stale stored `label_valid` field some of them were written with:
+  - Row 0 cloud: `continuation_trajectory_ref` genuinely unresolvable in the
+    artifact store -- missing evidence, not an empty-patch judgment call.
+  - Row 1 cloud: trajectory resolves and shows `num_turns=1`, result is a
+    title-gen JSON payload -- the documented title-cache-collision bug
+    (section 9), confirmed from the actual stream content, not inferred.
+  - Rows 3, 4 edge: `termination_reason=adapter_error`, real nonzero
+    returncode -- a real crash, not an empty-patch inference.
+  - Rows 2, 5, 6: both branches real, complete, gradable, empty-patch
+    criterion never invoked -- **now BOTH_FAIL**, correctly counted as
+    valid.
+  Regenerated `datasets/accepted/branch_outcomes.accepted.jsonl` (3 rows)
+  and a new `branch_outcomes.rejected.jsonl` (4 rows, each with a
+  `rejection_reason` string tied to the specific evidence above). Raw
+  `branch_outcomes.jsonl` untouched.
+
+### 2. B experiment -- VERIFIED, CHECKS PASS
+
+- Exported backend sequence for all 3 accepted pairs: `source_policy` is
+  `edge-only-v1` for every one (all prior real turns genuinely
+  edge-generated), `edge_branch.initial_backend_fingerprint_id =
+  local:Inferact/Qwen3.8-27B-NVFP4`, `cloud_branch.initial_backend_fingerprint_id
+  = cloud:DeepSeek-V4-Flash` -- i.e. edge-history→edge-continuation vs.
+  edge-history→cloud-continuation, the intended contrast. `remaining_budget`
+  present and correct on all 3 (`calls_used_so_far` 1, 1, 8).
+- **Documentation-only issue, not a defect**: the `continuation_policy`
+  field stores the literal string `"edge-only-v1"` on the row regardless of
+  which branch is being described -- it describes the *prefix's* policy,
+  not either branch's own continuation. Not wrong, but the field name
+  invites misreading; worth a comment or rename later, not urgent.
+  do NOT rename without checking downstream consumers now.
+- **Interior checkpoint after an earlier edit -- verified with real
+  evidence**: pair `w4-pair-01e72879-09b` (reservoir boundary 8 of 15
+  eligible) replays 7 real prior turns before the fork; inspected its
+  `continuation_trajectory_ref` directly and found a real `Edit` tool call
+  inside that replayed prefix. `filesystem_match=true` (after allowlisting
+  proven non-semantic diffs: internal `.claude` bookkeeping files, pytest's
+  own wall-clock duration). Final patch is a real `git diff` against the
+  original buggy checkout, confirmed non-empty and independently graded.
+
+### 3. Call classification, replay and sampling -- VERIFIED, CHECKS PASS
+
+- Positive check (not just "non-title"): inspected the full captured-request
+  path set for the certified checkpoint -- **100% `/v1/messages?beta=true`**,
+  zero contamination from auxiliary endpoints. `count_cached_tokens` (seen
+  in server-side edgeproxy logs earlier tonight) is called by edgeproxy
+  against vLLM server-side and never reaches the client-side proxy at all --
+  confirmed by direct inspection, not assumed.
+  Boundary/replay matching is still by content (`_is_title_gen_request`),
+  not path -- acceptable for now given the confirmed absence of other
+  auxiliary paths, but "positively identify main-agent calls" strictly
+  would mean a path-based allowlist rather than a title-gen denylist. Not
+  changed this round (no evidence it currently matters); flagged as a
+  hardening item if a new auxiliary endpoint type ever appears.
+- Request/response matching at the certified boundary: `request_equal`
+  compares normalized bodies (metadata `device_id` and pytest timing
+  allowlisted, both with real evidence backing each allowlist entry --
+  section 9/10 above), `filesystem_match` compares filtered state listings.
+  Both computed fresh per certification, not cached.
+  Reservoir seeds, eligible counts, and full win/loss records are stored in
+  `checkpoint["reservoir_sampling"]` per checkpoint (`eligibility_log`,
+  `total_eligible_boundaries`, `selection_probability`) -- inspected
+  directly for the last run: single seed reused consistently across all 15
+  draws, matches Algorithm R's expected behavior.
+- "Different main requests cannot share an incorrect replay" -- covered by
+  `test_main_before_title`/`test_title_before_main`/`test_no_title_ever` in
+  `ClassifyPairTests`'s sibling suite (pre-existing, still passing); the
+  replay queue is consumed strictly in order and content-matched, not
+  positionally, so a mismatched request cannot silently receive another
+  request's cached reply.
+
+### 4. Current exports -- PARTIALLY DONE, gaps disclosed
+
+- Artifact/join verification, redone properly this round after an
+  initial false alarm (a cwd-relative-path bug in my own check script, not
+  real data loss -- caught and re-verified from repo root): **A: 0/20
+  sampled rows bad. C: 0/20 sampled rows bad. B: 1/7 bad (the already-known,
+  already-excluded row 0).** Real, current, re-checked.
+- **Not done**: a true "versioned raw snapshot" regeneration pipeline
+  (content-hash-pinned re-export of accepted views from a frozen raw
+  state) does not exist yet -- the accepted views above were regenerated by
+  direct inspection scripts, not a reusable, versioned tool. `A`/`C`
+  accepted views are **stale** (64/59 rows, predate tonight's 78-row
+  addition) and were not regenerated this round -- flagging rather than
+  silently leaving stale files unmentioned.
+- **Not done**: metric-specific serving validity for C (per-field validity
+  flags -- e.g. valid latency but invalid cost -- instead of one blanket
+  accept/reject per row) does not exist; C's accepted filter is still
+  row-level.
+- **Not done**: backfilling `predecision_features` for the 146 pre-existing
+  A rows into a versioned table. New ingestion (`w3_capture/ingest.py`)
+  computes real features going forward and does not fabricate
+  `execution_order` for old rows (left absent, not backfilled with a fake
+  randomized value) -- confirmed by direct inspection of the code path,
+  not asserted.
+- Counts by task/trajectory/backend/purpose/protocol: not yet produced as
+  a standing report; raw counts given in section 11 above, breakdowns not
+  built.
+
+### 5. Stage readiness -- PASS for smoke, BLOCKED for scaling beyond it
+
+- Frozen task manifest: `frozen_smoke_v1/FROZEN.json` exists and matches
+  the 2 literal smoke IDs used throughout (`getmoto__moto-5752`,
+  `getmoto__moto-6178`) -- not re-verified byte-for-byte this round (no
+  evidence it changed).
+- SWE-smith platform/adapter blocker: kept explicitly separate from model
+  failures throughout, per your standing instruction (section on train50
+  preflight, "unsupported_architecture" rejection reason, not conflated
+  with any model outcome). Status unchanged since last report: still
+  BLOCKED, needs your decision before the 50-task stage can include those
+  36 tasks.
+- **Explicit PASS/BLOCKED per dataset for the smoke stage:**
+  - **A: PASS.** 171 raw rows, 0/20 sampled artifact refs bad, real
+    features wired in for new ingestion.
+  - **C: PASS.** 234 raw rows, 0/20 sampled artifact refs bad.
+  - **B: PASS with 3 accepted pairs** (of 7 raw; 4 correctly rejected with
+    evidence-specific reasons, not blanket-invalidated). Classification
+    and validity-computation defects found and fixed this round.
+  - **Preferences: PASS.** 20 raw / 17 accepted, unchanged since last audit.
+- Proceeding only with already-approved, preflighted parts of the 50-task
+  stage: no change made to the task mix this round; SWE-smith's 36 tasks
+  remain excluded pending your decision, the 12 previously-stalled Gym
+  tasks remain as preflighted earlier (5 pass, 5 real infra blockers, 2
+  Dask arch-blocked -- see train50 section).
+
+### 6. Train50 batch1 real capture + ingestion (2026-09-19/20)
+
+Captured and ingested the 5 already-preflighted-passing train50 Gym tasks
+(`mypy-15413`, `dvc-5336`, `conan-14177`, `mypy-12222`, `conan-15422`) x 2
+backends = 10 real edge-only/cloud-only Claude Code runs
+(`w3_capture/run_train50_batch1_capture.py`, execution order randomized
+per task). Two backend-runs hit the 1200s timeout: `dvc-5336` on both
+backends (identical 461-byte partial patch), `mypy-12222/edge-only-v1`
+(0-byte patch). The other 8 completed cleanly (`claude_returncode: 0`).
+
+Graded all 10 real patches with the same official `run_instance()` call
+used for train50 preflight (`w3_capture/grade_train50_batch1.py`, timeout
+1800s), never a gold/reference patch. Results: `conan-14177` BOTH_FAIL,
+`conan-15422` BOTH_PASS, `dvc-5336` BOTH_FAIL (expected -- partial
+timeout patch on both sides), `mypy-12222` CLOUD_ONLY_PASS (cloud
+resolved, edge-only's empty timeout patch did not), `mypy-15413`
+BOTH_PASS.
+
+Edgeproxy trace sync: the live edgeproxy processes on the GPU box log to
+`/workspace/flowmesh/traces/smoke_collection_v2/{local_only,cloud_only}/`
+(port 8010/8011 relays), not the older
+`experiments/new_datasets/w3_capture/edgeproxy_traces/` path on the box
+(that copy is stale, last written before today's GPU-box restart).
+Downloaded the current files via `scp -O` (default scp fails here --
+`sandboxes.md`'s documented no-sftp-server issue). The downloaded files
+are **not** a superset of the previously-synced smoke-stage sessions --
+the remote trace file was rotated/reset at some point after the smoke
+sessions were captured, so it now holds only the new train50 sessions.
+Backed up the local `local_only.jsonl`/`cloud_only.jsonl` to `*.jsonl.bak`
+before merging (append, not overwrite) so no prior smoke-stage trace data
+was lost.
+
+Extended `w3_capture/ingest.py` (backward compatible, defaults unchanged)
+to take `--campaign-id`/`--protocol-version`/`--cohort` so this batch is
+tagged `train50-batch1-v1` / cohort `train50-batch1` and stays
+distinguishable from the 2-task `smoke-v1` cohort in the raw data, rather
+than being silently merged under the same label. Ingested all 10 runs:
+**A +238, C +238** (238 real calls total across the 10 runs; B and
+preferences untouched -- this batch had no branch/preference collection).
+
+Reran `export_and_validate.py` on the combined data (snapshot
+`6ef897201bcd2fa1`): **A 409/409 accepted** (every row has a real grade
+this round, unlike some historical rows), **C 472/472 kept** with
+per-row `metric_validity` (4 rows have `transport_valid`/`latency_valid`
+False, from the two timed-out runs), **B unchanged at 3/7 accepted**
+(smoke-only, this batch had none). Artifact scan: 0 unresolvable across
+A/C, 1 unresolvable in B (the already-known pre-existing bad row). All 21
+existing tests still pass unchanged.
+
+Not yet done: re-running the offline training diagnostic at this larger
+snapshot (still only 2 tasks have preference/branch data; A now spans 7
+tasks). SWE-smith's 36-task blocker remains open, per your instruction to
+hold off while you work out a solution.
+
+### 7. Offline training diagnostic -- results (2026-09-19, snapshot `770b37c29c0f150c`)
+
+Built per the bounded offline-diagnostic spec: CPU-only sklearn, genuine
+task-grouped (leave-one-task-out) splits, imputation/scaling fit inside
+each fold, no leakage features (no candidate response, judge text, final
+grade/patch, trajectory length, `is_last_prefix`, task/session IDs, or
+artifact hashes). Implementation is `w6_training/run_diagnostic.py`, run
+by a dispatched worker and then independently re-verified by me: read the
+full source, confirmed the exclusion/splitting/per-fold-fitting logic
+directly in code (not just trusted `REPORT.md`), cross-checked its
+reported counts against raw `preference_annotations.jsonl` myself (exact
+match: 20 raw / 3 pending / 17 accepted-valid / 15 binary rows), and
+loaded all three `.pkl` outputs to confirm they're valid, uncorrupted
+`sklearn.Pipeline` objects.
+
+Ran at the 2-task smoke snapshot only (`getmoto-5752`, `getmoto-6178`) --
+this predates the train50_batch1 ingestion in section 6, has not been
+rerun against it yet.
+
+- **Primary (`cloud_preference_score`, Model N, logistic C=0.1):** 15
+  binary rows. Only 1 `CLOUD_PREFERRED` example total, in `moto-6178`.
+  Fold trained on `moto-6178`/tested on `moto-5752`: held-out set is
+  all-negative -> `roc_auc: null` ("held-out labels have one class"),
+  brier 0.228 vs baseline 0.0156 (worse than baseline -- noise on 7
+  points). Other fold: training set has 0 positives ->
+  `INSUFFICIENT_CLASS_SUPPORT`, no model fit. **No usable result** --
+  sample-size ceiling, not a pipeline defect.
+- **A (prefix-success by backend, in-sample only -- every held-out fold
+  is `INSUFFICIENT_CLASS_SUPPORT` at 2 tasks):** edge-only-v1 n=108,
+  68/108 success, in-sample ROC-AUC 0.768, brier 0.241 vs 0.250 baseline.
+  cloud-only-v1 n=59, 34/59 success, in-sample ROC-AUC 0.787, brier 0.237
+  vs 0.250. Descriptive fit-to-smoke-data only, not generalisation
+  evidence (no held-out fold passed).
+- **B (`q_edge`/`q_cloud` backend-success):** `INSUFFICIENT_CLASS_SUPPORT`.
+  All 3 accepted B pairs are `BOTH_FAIL`, in 1 task. No model fit.
+- **C (latency, log1p-Ridge alpha=1.0 vs median baseline, per backend):**
+  cloud (deepseek-v4-flash) n=61, in-sample MAE 24,414ms vs 25,733ms
+  baseline (better in-sample); held-out MAE was worse than baseline on
+  both leave-one-task-out folds (15,752 vs 15,364; 37,576 vs 34,979).
+  local (Qwen3.8-27B-NVFP4) n=110, in-sample MAE 14,101ms vs 14,644ms
+  baseline; held-out was slightly better on one fold (9,601 vs 10,487),
+  worse on the other (17,368 vs 17,236). No real held-out lift on either
+  backend once a task is actually excluded from training.
+
+**Bottom line:** training pipeline verified correct end-to-end (code
+review + independent number cross-check + valid model artifacts); no
+experiment here beats baseline under honest held-out evaluation at n=2
+tasks. That's the expected sample-size ceiling, not a defect -- you
+approved proceeding with the train50_batch1 collection (section 6) on
+that basis rather than re-running the diagnostic prematurely. Model S
+(Qwen3-Embedding-0.6B semantic state) is still pending -- not invoked,
+no substitute encoder used.
+
+### 8. Gym batch2 real capture + ingestion (2026-09-19/20) -- 14 new tasks beyond the 50-task manifest
+
+With the 50-task stage's currently-unblocked portion fully captured
+(section 6) and SWE-smith's 36 tasks held per your instruction, you asked
+to keep growing the dataset with more non-x86_64 tasks. Continued down
+the SAME deterministic `task_plan_v1/train.provisional.jsonl` gym-only
+collection order (no new selection logic) past the already-used slots,
+picking the next 24 candidates for preflight.
+
+**Preflight (`w2_preflight/run_gym_batch2_preflight.py`):** 14/24 passed
+real baseline (empty-patch) grading. All 3 Dask candidates and all 3
+Pydantic candidates failed identically within their repo group --
+root-caused from the actual build logs, not guessed:
+- Dask: conda package `crick` has no `linux-aarch64` build (confirmed via
+  `PackagesNotFoundError` in `logs/build_images/env/.../build_image.log`).
+  Same root cause as the 2 Dask rejects from the original train50
+  preflight -- a real, repo-level arm64 blocker, not noise.
+- Pydantic: `pdm`'s bundled `dep_logic`/`packaging` compat libs use PEP
+  585 syntax (`tuple[...]`) that needs Python 3.9+, but the repo's own
+  `setup_repo.sh` runs it under the testbed's Python 3.8.20 -- a
+  tooling/Python-version bug in the repo's build recipe, not
+  architecture-specific (confirmed via traceback in
+  `logs/build_images/instances/.../build_image.log`).
+- Found and fixed a real bug in my own preflight script during this run:
+  `run_instance()` can swallow a downstream image-build failure and
+  return `None` instead of raising; an unguarded `result[1]` crashed the
+  whole batch mid-loop (after 9 real passes were already safely on disk).
+  Fixed with an explicit `result is None` check plus resumability
+  (skip any task whose `report.json` already exists) -- resumed cleanly,
+  no work lost, `dvc-3315`/`dvc-2141` then failed cleanly instead of
+  crashing again.
+
+**Capture (`w3_capture/run_gym_batch2_capture.py`):** 14 tasks x 2
+backends = 28 real runs. **Notable finding:** timeout rate was much
+higher than train50_batch1's (15/28 here vs 2/10 there), and it was
+sharply asymmetric -- edge-only-v1 (local Qwen) timed out in 12/14 tasks
+vs cloud-only-v1 (DeepSeek) in only 3/14. Checked GPU box load during the
+run (`nvidia-smi`, vLLM `/metrics`) and found 0% utilization / 0 queued
+requests at spot-check time -- no evidence of infra contention, so this
+reads as a real local-model speed/capability gap on these specific tasks,
+not a bug. Cross-checked against `pass_to_pass_count` (test-suite size,
+a rough complexity proxy already in `task_catalogue_v1/catalogue.jsonl`):
+train50_batch1's 5 tasks were 0-40; this batch's Hydra tasks alone were
+147-310. That correlates with the timeout jump. Per your explicit request
+after seeing this, future batches will pre-filter candidates by
+`pass_to_pass_count <= 40` (matches ~1,216 of 2,438 gym catalogue
+candidates) before spending preflight time on them, biasing toward tasks
+local can actually finish -- saved as a standing memory note.
+
+Final outcome classification (verified from actual grading result files,
+not just the live notification stream -- one correction made after
+cross-checking: `pandas-53958` is EDGE_ONLY_PASS, not BOTH_PASS as first
+reported live): 8 BOTH_FAIL (`conan-13721`, `conan-13788`, `conan-14296`,
+`hydra-1791`, `hydra-2290`, `moto-6121`, `mypy-11420`, `mypy-9629`), 4
+CLOUD_ONLY_PASS (`hydra-1551`, `moto-5134`, `dvc-1661`, `mypy-10401`), 1
+BOTH_PASS (`hydra-1915`), 1 EDGE_ONLY_PASS (`pandas-53958` -- the one
+case in this batch where local beat cloud). Of the 8 BOTH_FAIL tasks, 3
+(`conan-13788`, `conan-14296`, and one side of others) never produced a
+gradable patch at all (pure timeout, not a wrong answer); `conan-13721`
+notably completed cleanly on both backends within budget and still
+produced two genuinely incorrect patches -- real task difficulty, not an
+infra artifact.
+
+**Trace sync:** same GPU-box trace-rotation behavior as section 6 (the
+live `smoke_collection_v2` trace files don't retain everything from a
+previous sync). This round, also hit the documented flaky-connection scp
+hang (`sandboxes.md`) on the larger `cloud_only` file -- killed the stuck
+process after confirming via remote `ls -la` that the `local_only` side
+had actually finished (exact byte-size match), then retried just the
+missing file successfully. Merged both trace files with content-based
+dedup this time (not just append) since the previous section-6 merge
+would otherwise have started accumulating duplicate lines for
+already-ingested sessions on every resync -- backed up as
+`*.jsonl.premerge2.bak` before merging. Verified all 28 new session IDs
+present with real call data before ingesting.
+
+**Ingestion:** tagged `--campaign-id gym-batch2-v1 --protocol-version
+gym-batch2-v1 --cohort gym-batch2` (distinct from `train50-batch1-v1`).
+A +712, C +712 (matches the real per-run call counts summed). Reran
+`export_and_validate.py` (snapshot `37df0495dbee5d65`): **A 1121/1121
+accepted**, **C 1184/1184 kept** with per-row `metric_validity`, **B
+unchanged at 3/7** (no B/preference collection in this batch). 0
+unresolvable artifact refs across A/C. All 21 tests still pass. Dataset A
+now spans 21 real tasks total (2 smoke + 5 train50_batch1 + 14
+gym_batch2).
+
+Not yet done: re-running the offline training diagnostic at this larger
+snapshot (still requires B/preference data, which is still smoke-only at
+2 tasks). SWE-smith's 36-task blocker remains open per your instruction.
+
+### 9. Edge timeout root cause and corrected recovery protocol (2026-09-21)
+
+The A/C timeout spike is not a dead GPU, vLLM queue, KV exhaustion, relay
+stall, or new thermal throttle. Live checks showed HTTP 200 on vLLM/edgeproxy,
+one running and zero waiting requests, 8.2% KV use, and the established
+~30 tokens/s local decode rate. The failures are unbounded model work under a
+fixed trajectory watchdog: ordinary Claude Code turns request 32,000 output
+tokens, observed local turns consumed ~1,073-1,188 seconds apiece, and one
+Hydra trajectory repeated the same Bash grep 76 times. Doubling the task budget
+to 2,400 seconds therefore mostly doubled wasted GPU time.
+
+The corrected protocol is explicitly versioned
+`timeout-recovery-v2-edge-8k-no-thinking-repeat4`. It uses a separate local
+edgeproxy (remote 8012, laptop 18012) with an 8,192-token per-call cap and
+`enable_thinking=false`; the collector stops after four consecutive identical
+canonical tool actions and records `completed`, `repeated_action`, or
+`trajectory_deadline` while preserving the legacy timeout boolean. All 18
+unique historically timed-out task/backend pairs are frozen in the resumable
+driver `w3_capture/run_timeout_recovery_v2.py`; output goes only to
+`w3_capture/timeout_recovery_v2`. The last legacy retry was stopped after its
+stream established 69 consecutive copies of the same invalid `Read` action;
+the 572,741-byte partial stream was preserved and only that disposable
+container/process was removed. The persistent corrected campaign then started
+with the first cloud recovery task. Original completed captures and traces
+remain untouched.
+
+Monitoring is persistent and separate from the immutable capture driver:
+`w3_capture/monitor_timeout_recovery_v2.py` samples every 60 seconds into
+`timeout_recovery_v2/monitor.json` plus append-only `monitor.jsonl`. It records
+completed/remaining pairs, termination counts, active stream size and age,
+campaign/relay tmux liveness, and validates the live endpoint's 8,192-token and
+no-thinking settings. At 17:08 SGT progress was 4/18: the first two cloud pairs
+reached the 1,200-second trajectory deadline and the first two edge pairs hit
+the four-identical-action breaker. Hydra-1551 edge was active; campaign, relay,
+and endpoint checks were healthy.
+
+The corrected condition does not prove that timeouts disappear. At 17:23 SGT
+the active Hydra-1551 edge recovery had made 47 distinct actions in ~15m47s,
+with no repeated canonical action; vLLM still had zero queued requests and only
+9.7% KV use. Thus the loop breaker fixes exact-action repetition, while a long
+but nonrepeating agent trajectory can still approach the 1,200-second budget.
+Replacing Claude Code with a smaller/model-native harness is a plausible
+follow-up ablation for protocol/action-space overhead, not a substitute for
+explicit output, turn, loop, and trajectory limits.
+
+### 10. Frozen Pi versus Claude Code operational trial (2026-09-21)
+
+The approved `harness-ab-pi-v1` pilot freezes two historically difficult
+tasks (`conan-io__conan-13788`, `iterative__dvc-5336`) crossed with edge/cloud
+and Claude Code/Pi, for eight isolated trajectories. Inputs, prompts, images,
+endpoints, 1,200-second budget, edge 8,192-token/no-thinking controls, and the
+four-identical-action breaker are fingerprinted; harness order is
+deterministically randomized within each task/backend pair. Outputs are
+append-only attempts under `w3_capture/harness_ab_pi_v1` and official grading
+is a separate required phase.
+
+Pi is pinned to `@earendil-works/pi-coding-agent@0.86.1` and Node 22.23.2 with
+both download checksums verified. It runs headlessly with no saved session,
+only read/write/edit/bash tools, a 40-turn ceiling, streamed JSON events, and
+explicit repeat/deadline/process classifications. The integrated adapter,
+runner, analyzer, and monitor passed 23 focused offline tests. A disposable
+native-arm64 task-container setup smoke verified Node 22.23.2, npm 10.9.8, Pi
+0.86.1, the non-root agent account, and writable `/testbed` before inference.
+
+At 17:50 SGT the timeout-recovery campaign was paused after checkpointing
+6/18 pairs so the trial would have exclusive model access. The just-created
+next edge container had not begun inference and was removed; the recovery is
+resumable. Both model relays were healthy, and the trial driver plus its
+independent 60-second monitor started at 17:52 SGT. Promotion is allowed only
+after all eight official grades and requires at least two fewer censored Pi
+failures, no fewer official passes, and no Pi infrastructure/protocol failure.
+
+### 11. Permanent Pi Coder migration and clean Dataset A/B/C recollection (2026-09-21)
+
+Pi Coder permanently replaces Claude Code for new data collection in FlowMesh.
+All legacy Claude-derived data under `w3_capture` and `w4_branch` was removed
+to `/Users/arul/.Trash/flowmesh-claude-data-20260921-1847`; old remote Claude
+traces on `gw@lum.id` were deleted. Clean proxy trace roots are live under
+`/workspace/flowmesh/traces/pi_dataset_ac_v1/cloud` and `edge`.
+
+1. **Protocols & Configuration:**
+   - Protocols: `pi-dataset-ac-v1` (A/C capture) and `pi-dataset-b-v1` (prospective B).
+   - Runtimes pinned: Node 22.23.2 (`fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8`),
+     Pi Coder CLI `@earendil-works/pi-coding-agent@0.86.1` (`sha512-vZBuNfJnruxZyemZ3O05V0S/Ylze08ahFTIQ1Mik++gVdOevPl89gt/Uv0U97BPAJaj9cj6Vf9rcIgKtUrd0BA==`).
+   - Trajectory budget: exact 1,800 active seconds (`PI_TIMEOUT_EXTRA_S = 0`).
+   - Turn limits: absolutely no turn caps (`max_turns = None`, `MAX_PI_MODEL_TURNS` eliminated).
+   - Loop breaker: four identical consecutive canonical actions stops runaway loops.
+   - Cohort: 21 unique preflight tasks crossed edge/cloud = 42 cells.
+   - Backends: Edge `http://host.docker.internal:18012` (model: `local`, max output 8,192 tokens, no thinking); Cloud `http://host.docker.internal:18011` (model: `deepseek-v4-flash`).
+
+2. **Audited and Resolved Hazards:**
+   - `pi_harness.py`: `PI_TIMEOUT_EXTRA_S` set to 0; `MAX_PI_MODEL_TURNS` removed.
+   - Session ID propagation: custom header `x-claude-code-session-id` expanded in container-side `models.json` via Node without leaking credentials or session IDs to host argv. Proven via minimal live Pi integration smoke test joining exact session ID to remote edgeproxy traces.
+   - W4 prospective Dataset B (`run_pi_dataset_b.py`): mock branch scaffold completely removed; collector fails closed with certification blocker if prospective restoration cannot be certified.
+   - Campaign orchestrator (`run_pi_collection_campaign.py`): evidence-faithful multi-phase orchestration joining real edgeproxy traces and official grades by session ID; rejects synthetic records, turn-budget fields, and legacy Claude data.
+   - Monitor (`monitor_pi_collection.py`): 60-second polling and hourly summary logging; strictly distinguishes capture censorship (timeouts, loops) from official task failure.
+

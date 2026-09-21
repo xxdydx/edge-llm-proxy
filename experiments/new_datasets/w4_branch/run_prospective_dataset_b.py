@@ -13,6 +13,8 @@ import base64
 import http.client
 import json
 import os
+import random
+import re
 import shlex
 import socketserver
 import subprocess
@@ -44,6 +46,7 @@ from certify_resume import file_manifest, sha256  # noqa: E402
 sys.path.insert(0, str(ND))
 from w1_storage.schemas import Branch, BranchOutcome  # noqa: E402
 from w1_storage.store import JobStore  # noqa: E402
+from w1_storage.grading import parse_resolved  # noqa: E402
 
 
 def sh(cmd: list[str], *, input: bytes | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -89,6 +92,57 @@ class Proxy(socketserver.ThreadingTCPServer):
 # candidates by request content (not arrival order) is required so a branch's
 # real main call is never served a cached title reply.
 _TITLE_GEN_MARKER = "You are naming a coding session"
+
+# Non-semantic per-run bookkeeping (timestamped/random filenames, internal
+# logging verbosity) verified to differ run-to-run with identical content.
+_STATE_LISTING_ALLOWLIST = (
+    "/.claude/sessions/", "/.claude/backups/", "/.claude/shell-snapshots/",
+    "/.claude/.last-cleanup",
+)
+
+
+# pytest's own wall-clock duration, e.g. "139 passed, 620 warnings in 10.10s".
+# Varies run to run on a real re-executed test suite; not a semantic difference.
+_PYTEST_DURATION_RE = re.compile(r"in \d+\.\d+s\b")
+
+
+def _scrub_nondeterministic_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PYTEST_DURATION_RE.sub("in N.NNs", value)
+    if isinstance(value, list):
+        return [_scrub_nondeterministic_text(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub_nondeterministic_text(v) for k, v in value.items()}
+    return value
+
+
+def _normalized_body(body: dict) -> dict:
+    # metadata.user_id embeds a per-container device_id that varies run to
+    # run with identical conversation content; not a semantic difference.
+    body = dict(body)
+    meta = body.get("metadata")
+    if isinstance(meta, dict) and isinstance(meta.get("user_id"), str):
+        try:
+            uid = json.loads(meta["user_id"]); uid["device_id"] = None
+            meta = dict(meta); meta["user_id"] = json.dumps(uid, sort_keys=True)
+            body["metadata"] = meta
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if "messages" in body:
+        body["messages"] = _scrub_nondeterministic_text(body["messages"])
+    return body
+
+
+def _filter_state_listing(text: str) -> str:
+    out = []
+    for ln in text.splitlines():
+        if any(p in ln for p in _STATE_LISTING_ALLOWLIST):
+            continue
+        if ".claude/projects/" in ln and ln.endswith(".jsonl"):
+            perm, typ, _size, path = ln.split(" ", 3)
+            ln = f"{perm} {typ} {path}"
+        out.append(ln)
+    return "\n".join(out)
 
 
 def _is_title_gen_request(body: dict) -> bool:
@@ -149,6 +203,15 @@ class Handler(socketserver.BaseRequestHandler):
                "body": json.loads(body), "body_sha256": sha256(body)}
         self.server.requests.append(req)
         idx = len(self.server.requests)
+        queue = getattr(self.server, "replay_queue", None)
+        if queue:
+            resp = queue.pop(0)
+            req["replay_matched"] = True
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n"
+                + f"content-length: {len(resp)}\r\n\r\n".encode() + resp
+            )
+            return
         replay = getattr(self.server, "replay_response", None)
         replay_served = getattr(self.server, "replay_served", False)
         is_title = _is_title_gen_request(req["body"])
@@ -170,11 +233,22 @@ class Handler(socketserver.BaseRequestHandler):
             if diag is not None:
                 diag.append({"idx": idx, "reason": "incoming request is not title-gen-shaped; replay skipped",
                              "body_sha256": req["body_sha256"]})
+        # Reservoir sampling: hold each eligible boundary for main()'s Algorithm R loop.
+        if not is_title and getattr(self.server, "reservoir_mode", False):
+            ev = threading.Event()
+            with self.server.lock:
+                self.server.pending_request = req
+                self.server.pending_event = ev
+                self.server.pending_idx = idx
+                self.server.request_ready.set()
+            released = ev.wait(timeout=180)
+            if not released:
+                return
         # The main-task request is whichever live (non-title-gen) request
         # arrives first, not a hardcoded position -- title-gen may or may not
         # precede it. Hold it here (once) for capture-phase boundary/commit
         # semantics; branches set hold_boundary=False and skip this entirely.
-        if not is_title and getattr(self.server, "hold_boundary", True) and not self.server.held.is_set():
+        elif not is_title and getattr(self.server, "hold_boundary", True) and not self.server.held.is_set():
             self.server.held.set()
             self.server.boundary.set()
             # Keep the client process alive while the host commits its state.
@@ -294,46 +368,49 @@ def restore_and_compare(cp: dict[str, Any], candidate: dict[str, Any], name: str
 
 
 def reconstruct_and_compare(cp: dict[str, Any], candidate: dict[str, Any], prompt: str, name: str) -> dict[str, Any]:
-    start(name, cp["image"]); setup(name)
-    # Rebuild the conversation in a fresh process/container while retaining
-    # the original session identity, which is part of the request metadata.
+    start(name, IMAGE); setup(name)
     dexec(name, "rm -f /home/agent/.claude/projects/-testbed/" + shlex.quote(cp["session_id"]) + ".jsonl; rm -f /home/agent/.claude/sessions/*", timeout=60)
     pxy = Proxy(("0.0.0.0", 0), Handler); pxy.relay = 18010; pxy.requests = []
     pxy.boundary = threading.Event(); pxy.release = threading.Event(); pxy.held = threading.Event()
-    title_idx = cp.get("title_gen_request_index")
-    if title_idx is not None:
-        pxy.replay_response = base64.b64decode(cp["captured_requests"][title_idx]["response_body_b64"])
+    prior = cp["captured_requests"][:cp["main_request_index"]]
+    pxy.replay_queue = [base64.b64decode(r["response_body_b64"]) for r in prior]
     pxy.replay_diagnostics = []
     threading.Thread(target=pxy.serve_forever, daemon=True).start()
     fresh_session = cp["session_id"]
     p = run_claude(name, pxy.server_address[1], fresh_session, prompt, "local")
-    if not pxy.boundary.wait(240):
+    if not pxy.boundary.wait(300):
         p.kill(); pxy.shutdown(); pxy.server_close()
         return {"method": "faithful_prefix_reconstruction", "request_present": False, "request_equal": False,
-                "reason": "reconstruction boundary not reached", "requests": len(pxy.requests)}
-    # The main-task request is whichever captured entry is not title-gen
-    # (position varies: title-gen may or may not precede it -- see
-    # _is_title_gen_request), not a hardcoded pxy.requests[1].
-    main_candidates = [r for r in pxy.requests if not _is_title_gen_request(r["body"])]
-    actual = main_candidates[0] if main_candidates else None
+                "reason": "reconstruction boundary not reached", "requests": len(pxy.requests),
+                "replay_queue_remaining": len(pxy.replay_queue)}
+    actual = pxy.requests[-1] if pxy.requests else None
     pxy.release.set(); p.kill()
     try: p.wait(timeout=30)
     except subprocess.TimeoutExpired: pass
+    state = dexec(name, "pwd; find /home/agent/.claude -xdev -printf '%M %y %s %p\\n' | sort; "
+                       "find /testbed -xdev -maxdepth 4 -printf '%M %y %s %p\\n' | sort", user="agent", timeout=120)
+    actual_filtered = _filter_state_listing(state.stdout.decode(errors="replace"))
+    expected_filtered = _filter_state_listing(cp.get("state_listing", ""))
+    filesystem_match = actual_filtered == expected_filtered
     pxy.shutdown(); pxy.server_close()
-    return {"method": "faithful_prefix_reconstruction", "request_present": actual is not None,
-            "request_equal": {k: actual.get(k) for k in ("path", "body", "body_sha256")} == {k: candidate.get(k) for k in ("path", "body", "body_sha256")} and {k: v for k, v in actual.get("headers", {}).items() if k not in {"host", "content-length", "connection", "transfer-encoding"}} == {k: v for k, v in candidate.get("headers", {}).items() if k not in {"host", "content-length", "connection", "transfer-encoding"}} if actual else False,
+    return {"method": "faithful_prefix_reconstruction", "filesystem_match": filesystem_match,
+            "filesystem_diff": None if filesystem_match else
+                {"expected_only": sorted(set(expected_filtered.splitlines()) - set(actual_filtered.splitlines())),
+                 "actual_only": sorted(set(actual_filtered.splitlines()) - set(expected_filtered.splitlines()))},
+            "request_present": actual is not None,
+            "request_equal": (_normalized_body(actual["body"]) == _normalized_body(candidate["body"])
+                              and {k: v for k, v in actual.get("headers", {}).items() if k not in {"host", "content-length", "connection", "transfer-encoding"}} == {k: v for k, v in candidate.get("headers", {}).items() if k not in {"host", "content-length", "connection", "transfer-encoding"}}) if actual else False,
             "expected_sha256": candidate.get("body_sha256"),
             "actual_sha256": actual.get("body_sha256") if actual else None,
-            "top_level_differences": sorted(k for k in set((actual or {}).get("body", {})) | set(candidate.get("body", {}))
-                                             if (actual or {}).get("body", {}).get(k) != candidate.get("body", {}).get(k)),
-            "top_level_difference_values": {k: {"expected": candidate.get("body", {}).get(k), "actual": (actual or {}).get("body", {}).get(k)}
-                                             for k in set((actual or {}).get("body", {})) | set(candidate.get("body", {}))
-                                             if (actual or {}).get("body", {}).get(k) != candidate.get("body", {}).get(k)},
+            "top_level_differences": sorted(k for k in set(_normalized_body((actual or {}).get("body", {}))) | set(_normalized_body(candidate.get("body", {})))
+                                             if _normalized_body((actual or {}).get("body", {})).get(k) != _normalized_body(candidate.get("body", {})).get(k)),
+            "top_level_difference_values": {k: {"expected": _normalized_body(candidate.get("body", {})).get(k), "actual": _normalized_body((actual or {}).get("body", {})).get(k)}
+                                             for k in set(_normalized_body((actual or {}).get("body", {}))) | set(_normalized_body(candidate.get("body", {})))
+                                             if _normalized_body((actual or {}).get("body", {})).get(k) != _normalized_body(candidate.get("body", {})).get(k)},
             "raw_header_differences": {k: {"expected": candidate.get("headers", {}).get(k), "actual": (actual or {}).get("headers", {}).get(k)}
                                         for k in set((actual or {}).get("headers", {})) | set(candidate.get("headers", {}))
                                         if (actual or {}).get("headers", {}).get(k) != candidate.get("headers", {}).get(k)},
-            "reconstruction_first_request_equal": bool(pxy.requests and pxy.requests[0].get("body_sha256") == cp["captured_requests"][0].get("body_sha256")),
-            "fresh_session_id": fresh_session}
+            "replayed_prior_turns": len(prior), "fresh_session_id": fresh_session}
 
 
 def grade(instance: dict[str, Any], patch: str, tag: str) -> tuple[dict[str, Any], Path]:
@@ -346,6 +423,19 @@ def grade(instance: dict[str, Any], patch: str, tag: str) -> tuple[dict[str, Any
     return report, Path("logs/run_evaluation") / run_id / ("w4-branch-" + tag) / INSTANCE / "report.json"
 
 
+def classify_pair(edge_b: "Branch", cloud_b: "Branch") -> tuple[bool, str]:
+    pair_valid = edge_b.label_valid and cloud_b.label_valid
+    if not pair_valid:
+        return False, "INVALID"
+    if edge_b.resolved and cloud_b.resolved:
+        return True, "BOTH_PASS"
+    if edge_b.resolved and not cloud_b.resolved:
+        return True, "EDGE_ONLY_PASS"
+    if cloud_b.resolved and not edge_b.resolved:
+        return True, "CLOUD_ONLY_PASS"
+    return True, "BOTH_FAIL"
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     if "ANTHROPIC_AUTH_TOKEN" not in os.environ:
@@ -355,35 +445,60 @@ def main() -> None:
     dataset = load_swebench_dataset(str(SOURCE)); instance = next(x for x in dataset if x["instance_id"] == INSTANCE)
     prompt = (ND / f"w3_capture/{INSTANCE}__edge-only-v1/prompt.txt").read_text()
     source_name = "w4-prospective-" + uuid.uuid4().hex[:10]; session = str(uuid.uuid4())
-    pxy = Proxy(("0.0.0.0", 0), Handler); pxy.relay = 18010; pxy.requests = []; pxy.boundary = threading.Event(); pxy.release = threading.Event(); pxy.held = threading.Event()
+    pxy = Proxy(("0.0.0.0", 0), Handler); pxy.relay = 18010; pxy.requests = []
+    pxy.boundary = threading.Event(); pxy.release = threading.Event(); pxy.held = threading.Event()
+    pxy.reservoir_mode = True
+    pxy.lock = threading.Lock(); pxy.request_ready = threading.Event()
+    pxy.pending_request = None; pxy.pending_event = None; pxy.pending_idx = None
     threading.Thread(target=pxy.serve_forever, daemon=True).start()
     start(source_name, IMAGE); setup(source_name)
     proc = run_claude(source_name, pxy.server_address[1], session, prompt, "local")
-    if not pxy.boundary.wait(600):
-        proc.kill(); raise RuntimeError(f"prospective boundary not reached; requests={len(pxy.requests)}")
-    # The held request (the boundary) is always the most recently appended
-    # one -- the handler holds the client's only in-flight connection, so
-    # nothing else can arrive while it waits. A title-gen request may or may
-    # not have preceded it (see _is_title_gen_request); it did iff there are
-    # exactly 2 captured requests so far.
-    main_idx = len(pxy.requests) - 1
-    title_idx = 0 if main_idx == 1 else None
-    if title_idx is not None:
-        response_deadline = time.time() + 30
-        while "response_body_b64" not in pxy.requests[title_idx] and time.time() < response_deadline:
-            time.sleep(0.1)
-    checkpoint = snapshot_container(source_name, session)
-    checkpoint["remaining_budget"] = {"max_main_logical_calls": 40, "calls_used_so_far": 1, "remaining_main_logical_calls": 39,
-                                       "max_active_seconds": MAX_ACTIVE_SECONDS, "remaining_active_seconds_lower_bound": 600}
-    checkpoint["selected_boundary"] = {"eligibility": ["main_agent_boundary", "no_pending_tool_actions", "both_backends_supported", "nonzero_budget"],
-                                       "request_index": main_idx, "candidate_request_sha256": pxy.requests[main_idx]["body_sha256"]}
-    checkpoint["captured_requests"] = pxy.requests
-    checkpoint["main_request_index"] = main_idx
-    checkpoint["title_gen_request_index"] = title_idx
-    checkpoint["response_capture_complete"] = title_idx is None or "response_body_b64" in pxy.requests[title_idx]
+
+    # Algorithm R reservoir sampling, spec section 8.1.
+    seed = int.from_bytes(hashlib.sha256(f"dataset-b-w4-v1|{INSTANCE}|{session}".encode()).digest()[:8], "big")
+    rng = random.Random(seed)
+    MAX_BOUNDARIES = 40  # matches max_main_logical_calls budget
+    n = 0
+    selected_checkpoint: dict[str, Any] | None = None
+    eligibility_log: list[dict[str, Any]] = []
+    while n < MAX_BOUNDARIES:
+        if proc.poll() is not None:
+            break  # trajectory ended (agent finished or crashed) -- stop sampling
+        if not pxy.request_ready.wait(timeout=600):
+            break  # no further boundary arrived -- trajectory is done
+        with pxy.lock:
+            req = pxy.pending_request; ev = pxy.pending_event; idx = pxy.pending_idx
+            pxy.request_ready.clear()
+        n += 1
+        win = rng.random() < (1.0 / n)
+        record = {"n": n, "request_index": idx, "win": win, "body_sha256": req["body_sha256"],
+                   "rng_seed": seed}
+        if win:
+            checkpoint = snapshot_container(source_name, session)
+            checkpoint["remaining_budget"] = {"max_main_logical_calls": MAX_BOUNDARIES, "calls_used_so_far": n,
+                                               "remaining_main_logical_calls": MAX_BOUNDARIES - n,
+                                               "max_active_seconds": MAX_ACTIVE_SECONDS, "remaining_active_seconds_lower_bound": 600}
+            checkpoint["selected_boundary"] = {"eligibility": ["main_agent_boundary", "no_pending_tool_actions",
+                                                                "both_backends_supported", "nonzero_budget"],
+                                               "reservoir_n": n, "request_index": idx,
+                                               "candidate_request_sha256": req["body_sha256"]}
+            checkpoint["captured_requests"] = list(pxy.requests)
+            checkpoint["main_request_index"] = idx - 1
+            checkpoint["title_gen_request_index"] = (0 if idx - 1 == 1 else None)
+            checkpoint["response_capture_complete"] = False
+            selected_checkpoint = checkpoint
+            record["snapshotted"] = True
+        else:
+            record["snapshotted"] = False
+        eligibility_log.append(record)
+        ev.set()
+    if selected_checkpoint is None:
+        proc.kill(); raise RuntimeError(f"no eligible boundary ever sampled; n={n}")
+    checkpoint = selected_checkpoint
+    checkpoint["reservoir_sampling"] = {"algorithm": "Algorithm R, SONNET_MASTER_PROMPT.md 8.1",
+                                          "total_eligible_boundaries": n, "eligibility_log": eligibility_log,
+                                          "selection_probability": (1.0 / n) if n else None}
     (OUT / "checkpoint.json").write_text(json.dumps(checkpoint, indent=2))
-    # Release and terminate source; source is not used as a branch.
-    pxy.release.set()
     proc.kill()
     try:
         proc.wait(timeout=30)
@@ -410,22 +525,20 @@ def main() -> None:
         cert["restore_method"] = "docker committed filesystem + resume attempt; faithful prefix reconstruction with recorded first model response"
         if not reconstructed["request_equal"]:
             cert["status"] = "FAIL"; cert["failure"] = "restored/reconstructed next request differs"; (W4 / "checkpoint_certificate.json").write_text(json.dumps(cert, indent=2)); raise RuntimeError(json.dumps(reconstructed))
-    # Use two fresh restored containers. Each starts with the same committed image and session.
+    # Each branch starts from the clean task image and replays every real
+    # prior exchange (letting tools actually re-execute), then diverges live
+    # on the winning turn.
+    prior = checkpoint["captured_requests"][:checkpoint["main_request_index"]]
     branches = {}
     for label, relay, model in [("edge", 18010, "local"), ("cloud", 18011, "deepseek-v4-flash")]:
         name = "w4-branch-" + label + "-" + uuid.uuid4().hex[:10]
-        start(name, checkpoint["image"]); setup(name)
+        start(name, IMAGE); setup(name)
         dexec(name, "rm -f /home/agent/.claude/projects/-testbed/" + shlex.quote(session) + ".jsonl; rm -f /home/agent/.claude/sessions/*", timeout=60)
         bp = Proxy(("0.0.0.0", 0), Handler); bp.relay = relay; bp.requests = []; bp.boundary = threading.Event(); bp.release = threading.Event(); bp.held = threading.Event()
         bp.hold_boundary = False
         bp.replay_diagnostics = []
+        bp.replay_queue = [base64.b64decode(r["response_body_b64"]) for r in prior]
         threading.Thread(target=bp.serve_forever, daemon=True).start()
-        title_idx = checkpoint.get("title_gen_request_index")
-        if title_idx is not None:
-            bp.replay_response = base64.b64decode(checkpoint["captured_requests"][title_idx]["response_body_b64"])
-        # else: no title-gen call preceded the main call during capture, so
-        # there is nothing to replay -- the branch's first live request IS
-        # the main call and gets forwarded live immediately (see Handler).
         child = run_claude(name, bp.server_address[1], session, prompt, model)
         out, err, rc = wait_process(child, MAX_ACTIVE_SECONDS + 90)
         patch = dexec(name, "cd /testbed && git diff", user="agent", timeout=60).stdout.decode()
@@ -441,24 +554,29 @@ def main() -> None:
     store = JobStore(ND)
 
     def branch_obj(label: str) -> Branch:
-        b = branches[label]; rep = b["report"].get(INSTANCE, {}); ts = rep.get("tests_status", {})
-        ftp = ts.get("FAIL_TO_PASS", {}); ptp = ts.get("PASS_TO_PASS", {})
-        resolved = all(x.get("status") == "PASSED" for x in [ftp, ptp])
+        b = branches[label]
+        resolved = parse_resolved(b["report"], INSTANCE)
         patch_ref = store.put_artifact(b["patch"].encode())["ref"]
         trajectory_ref = store.put_artifact((OUT / f"{label}_stream.jsonl").read_bytes())["ref"]
         grader_ref = store.put_artifact(json.dumps(b["report"], sort_keys=True).encode())["ref"]
+        # Evidence-specific validity: a real crash (nonzero returncode) or a
+        # report with no resolvable outcome is invalid. An empty/losing patch
+        # from a process that genuinely ran to completion is a valid result,
+        # not grounds for invalidity on its own.
+        label_valid = b["returncode"] == 0 and resolved is not None
         return Branch(branch_id="w4-b-" + label + "-" + session[:12], initial_backend_fingerprint_id="local:Inferact/Qwen3.8-27B-NVFP4" if label == "edge" else "cloud:DeepSeek-V4-Flash",
                       initial_candidate_ref=patch_ref, initial_invocation_id=b["invocation_id"], continuation_trajectory_ref=trajectory_ref,
-                      grader_ref=grader_ref, final_patch_ref=patch_ref, final_patch_hash=b["patch_sha256"], resolved=resolved, label_valid=b["returncode"] == 0,
+                      grader_ref=grader_ref, final_patch_ref=patch_ref, final_patch_hash=b["patch_sha256"], resolved=resolved, label_valid=label_valid,
                       termination_reason="completed" if b["returncode"] == 0 else "adapter_error", remaining_total_cost_usd=None, remaining_active_seconds=None, input_usage={}, output_usage={}, cost_integrity="unknown",
                       missing_reasons={"cost": "relay did not expose billable usage in this protocol"})
     edge_b, cloud_b = branch_obj("edge"), branch_obj("cloud")
+    pair_valid, pair_class = classify_pair(edge_b, cloud_b)
     row = BranchOutcome(schema_version=1, protocol_version="smoke-v1", campaign_id="dataset-b-w4-v1", task_id="gym:" + INSTANCE,
         trajectory_id="w4-prospective:" + session, source="edgeproxy-live-capture", cohort="smoke", split="train", provenance={"checkpoint_certificate": "w4_branch/checkpoint_certificate.json"},
         branch_pair_id="w4-pair-" + session[:12], prefix_id="w4-prefix-" + session[:12], checkpoint_id="w4-checkpoint-" + session[:12], checkpoint_certificate_ref="artifact:" + sha256((W4 / "checkpoint_certificate.json").read_bytes()),
         source_trajectory_id="w4-prospective:" + session, source_policy="edge-only-v1", sampling_probability=1.0, remaining_budget=checkpoint["remaining_budget"], edge_branch=edge_b, cloud_branch=cloud_b,
-        pair_valid=edge_b.label_valid and cloud_b.label_valid, observed_pair_class="BOTH_PASS" if branches["edge"]["report"].get(INSTANCE, {}).get("tests_status", {}).get("FAIL_TO_PASS", {}).get("status") == "PASSED" and branches["cloud"]["report"].get(INSTANCE, {}).get("tests_status", {}).get("FAIL_TO_PASS", {}).get("status") == "PASSED" else "INCOMPLETE",
-        diagnostic_flags=[] if edge_b.label_valid and cloud_b.label_valid else ["branch_adapter_error"])
+        pair_valid=pair_valid, observed_pair_class=pair_class,
+        diagnostic_flags=[] if pair_valid else ["branch_adapter_error" if edge_b.termination_reason == "adapter_error" or cloud_b.termination_reason == "adapter_error" else "no_resolvable_grade"])
     row.validate(); store.append_record("B", row); store.finalize_export()
     print(json.dumps({"certificate": str(W4 / "checkpoint_certificate.json"), "row": row.to_dict(), "branches": branches}, indent=2, ensure_ascii=False))
 

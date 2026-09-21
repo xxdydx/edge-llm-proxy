@@ -77,7 +77,14 @@ def _event(event: dict) -> str:
     return json.dumps(event, separators=(",", ":")) + "\n"
 
 
-def _run_fake(events: list[str], out_path: Path, *, exit_after_s: float | None = None):
+def _run_fake(
+    events: list[str],
+    out_path: Path,
+    *,
+    exit_after_s: float | None = None,
+    session_id: str = "sample-session-1234",
+    max_turns: int | None = None,
+):
     fake = _FakeProcess(events, exit_after_s=exit_after_s)
     captured: dict[str, object] = {}
 
@@ -94,9 +101,10 @@ def _run_fake(events: list[str], out_path: Path, *, exit_after_s: float | None =
                 "sample task prompt",
                 "http://host.docker.internal:18010",
                 "local-model",
-                "ignored-session",
+                session_id,
                 timeout_s=2,
                 out_path=out_path,
+                max_turns=max_turns,
             )
     return result, captured, fake
 
@@ -109,8 +117,9 @@ class PiHarnessTests(unittest.TestCase):
             m.NODE_ARCHIVE_SHA256,
             "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8",
         )
-        self.assertEqual(m.MAX_PI_MODEL_TURNS, 40)
+        self.assertEqual(m.PI_TIMEOUT_EXTRA_S, 0)
         self.assertEqual(m.MAX_IDENTICAL_ACTION_REPEATS, 4)
+        self.assertFalse(hasattr(m, "MAX_PI_MODEL_TURNS"))
 
     def test_setup_uses_checksum_verified_exact_assets(self):
         captured: dict[str, object] = {}
@@ -162,17 +171,31 @@ class PiHarnessTests(unittest.TestCase):
             self.assertIn("--mode json --no-session", script)
             self.assertIn("--thinking off", script)
             self.assertIn("--tools read,write,edit,bash", script)
+            self.assertIn("IFS= read -r FLOWMESH_SESSION_ID", script)
+            self.assertIn('export FLOWMESH_SESSION_ID="$FLOWMESH_SESSION_ID"', script)
             self.assertIn('PROMPT="$(cat)"', script)
             self.assertIn('"$PROMPT"', script)
             self.assertIn("http://host.docker.internal:18010", script)
             self.assertIn("$FLOWMESH_PI_API_KEY", script)
+            self.assertIn("x-claude-code-session-id", script)
             self.assertNotIn("do-not-put-me-in-argv", script)
-            self.assertEqual(fake.stdin.value, "do-not-put-me-in-argv\nsample task prompt")
+            self.assertNotIn("sample-session-1234", script)
+            self.assertNotIn("sample-session-1234", args)
+            self.assertEqual(fake.stdin.value, "do-not-put-me-in-argv\nsample-session-1234\nsample task prompt")
             self.assertTrue(fake.stdin.closed)
             self.assertEqual(result.termination_reason, "completed")
             self.assertEqual(result.model_turn_count, 1)
             self.assertEqual(result.output_tokens, 17)
             self.assertEqual(out_path.read_text(encoding="utf-8"), "".join(event_lines))
+
+    def test_models_json_propagates_session_id_header(self):
+        default_cfg = json.loads(m._models_json("http://host:1234", "test-model"))
+        provider = default_cfg["providers"][m.PI_PROVIDER_NAME]
+        self.assertEqual(provider["headers"]["x-claude-code-session-id"], "$FLOWMESH_SESSION_ID")
+
+        custom_cfg = json.loads(m._models_json("http://host:1234", "test-model", session_id="custom-uuid-sid"))
+        custom_provider = custom_cfg["providers"][m.PI_PROVIDER_NAME]
+        self.assertEqual(custom_provider["headers"]["x-claude-code-session-id"], "custom-uuid-sid")
 
     def test_repeated_canonical_action_stops_after_four_and_keeps_stream(self):
         events = [
@@ -191,13 +214,23 @@ class PiHarnessTests(unittest.TestCase):
             self.assertGreaterEqual(fake.kill_calls, 1)
             self.assertEqual(out_path.read_text(encoding="utf-8"), "".join(events))
 
-    def test_step_limit_allows_forty_turns_and_blocks_forty_first(self):
-        events = [_event({"type": "turn_start"}) for _ in range(m.MAX_PI_MODEL_TURNS + 1)]
+    def test_step_limit_allows_forty_turns_and_blocks_forty_first_when_configured(self):
+        events = [_event({"type": "turn_start"}) for _ in range(41)]
         with tempfile.TemporaryDirectory() as tmp:
-            result, _captured, fake = _run_fake(events, Path(tmp) / "steps.jsonl")
+            result, _captured, fake = _run_fake(events, Path(tmp) / "steps.jsonl", max_turns=40)
             self.assertEqual(result.termination_reason, "step_limit")
-            self.assertEqual(result.model_turn_count, m.MAX_PI_MODEL_TURNS)
+            self.assertEqual(result.model_turn_count, 40)
             self.assertGreaterEqual(fake.kill_calls, 1)
+
+    def test_no_turn_count_limit_by_default(self):
+        # pi-dataset-ac-v1 has absolutely no turn-count limit
+        turn_count = 50
+        events = [_event({"type": "turn_start"}) for _ in range(turn_count)]
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _captured, fake = _run_fake(events, Path(tmp) / "unlimited.jsonl", exit_after_s=0, max_turns=None)
+            self.assertEqual(result.termination_reason, "completed")
+            self.assertEqual(result.model_turn_count, turn_count)
+            self.assertEqual(fake.kill_calls, 0)
 
     def test_trajectory_deadline_is_classified_and_process_error_is_returned(self):
         with tempfile.TemporaryDirectory() as tmp:

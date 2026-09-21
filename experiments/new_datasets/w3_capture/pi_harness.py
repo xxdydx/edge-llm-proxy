@@ -34,10 +34,9 @@ NODE_ARCHIVE_URL = (
 NODE_ARCHIVE_SHA256 = "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
 NODE_INSTALL_DIR = f"/opt/node-v{NODE_VERSION}-linux-arm64"
 
-MAX_PI_MODEL_TURNS = 40
 MAX_IDENTICAL_ACTION_REPEATS = 4
 PI_MAX_OUTPUT_TOKENS = 8192
-PI_TIMEOUT_EXTRA_S = 60
+PI_TIMEOUT_EXTRA_S = 0
 PI_KILL_WAIT_S = 30
 PI_READER_JOIN_S = 10
 PI_PROVIDER_NAME = "flowmesh-edgeproxy"
@@ -129,7 +128,7 @@ pi --version | grep -Fx {shlex.quote(PI_PACKAGE_VERSION)} >/dev/null
         )
 
 
-def _models_json(base_url: str, model: str) -> str:
+def _models_json(base_url: str, model: str, session_id: str = "$FLOWMESH_SESSION_ID") -> str:
     """Return a per-run custom provider config, never including the API token."""
     config = {
         "providers": {
@@ -137,6 +136,9 @@ def _models_json(base_url: str, model: str) -> str:
                 "baseUrl": base_url,
                 "api": "anthropic-messages",
                 "apiKey": "$FLOWMESH_PI_API_KEY",
+                "headers": {
+                    "x-claude-code-session-id": session_id,
+                },
                 "models": [
                     {
                         "id": model,
@@ -163,11 +165,14 @@ def _build_command(container_name: str, base_url: str, model: str) -> list[str]:
         [
             "set -euo pipefail",
             "IFS= read -r ANTHROPIC_AUTH_TOKEN",
+            "IFS= read -r FLOWMESH_SESSION_ID",
             'PROMPT="$(cat)"',
             'export FLOWMESH_PI_API_KEY="$ANTHROPIC_AUTH_TOKEN"',
+            'export FLOWMESH_SESSION_ID="$FLOWMESH_SESSION_ID"',
             'export HOME="$(mktemp -d /tmp/pi-harness.XXXXXX)"',
             'mkdir -p "$HOME/.pi/agent"',
             f"printf '%s' {models_config} > \"$HOME/.pi/agent/models.json\"",
+            f"{NODE_INSTALL_DIR}/bin/node -e 'const fs=require(\"fs\");const p=process.env.HOME+\"/.pi/agent/models.json\";const c=JSON.parse(fs.readFileSync(p,\"utf8\"));c.providers[\"{PI_PROVIDER_NAME}\"].headers[\"x-claude-code-session-id\"]=process.env.FLOWMESH_SESSION_ID;fs.writeFileSync(p,JSON.stringify(c,null,2));'",
             f"export PATH={node_bin}:\"$PATH\"",
             "exec pi --mode json --no-session "
             f"--provider {shlex.quote(PI_PROVIDER_NAME)} "
@@ -209,16 +214,19 @@ def run_pi(
     session_id: str,
     timeout_s: int,
     out_path: Path,
+    *,
+    max_turns: int | None = None,
 ) -> PiRunResult:
     """Run one Pi trajectory and flush every JSON event to the output path.
 
-    session_id is accepted for parity with the Claude capture API, but Pi
-    intentionally runs with --no-session and does not persist sessions.
+    session_id is delivered via stdin (line 2) to prevent leaking to host argv,
+    and propagated through Pi's models.json as a custom header so proxy traces
+    can join to capture cells. Pi runs with --no-session and does not persist
+    local conversation state.
     The API token is read from the host environment and delivered as the first
-    stdin line; the prompt follows it on stdin and neither value is put in the
-    Docker/Pi argument vector.
+    stdin line; session_id is line 2; the prompt follows on line 3+ and none of
+    these values is put in the Docker/Pi argument vector.
     """
-    del session_id
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("", encoding="utf-8")
@@ -234,7 +242,12 @@ def run_pi(
 
     try:
         child_env = os.environ.copy()
-        for secret_name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "FLOWMESH_PI_API_KEY"):
+        for secret_name in (
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "FLOWMESH_PI_API_KEY",
+            "FLOWMESH_SESSION_ID",
+        ):
             child_env.pop(secret_name, None)
         proc = subprocess.Popen(
             _build_command(container_name, base_url, model),
@@ -259,7 +272,7 @@ def run_pi(
     assert proc.stdout is not None
     assert proc.stderr is not None
     try:
-        proc.stdin.write(api_token + "\n" + prompt)
+        proc.stdin.write(api_token + "\n" + session_id + "\n" + prompt)
         proc.stdin.close()
     except (BrokenPipeError, OSError, ValueError) as exc:
         try:
@@ -309,7 +322,7 @@ def run_pi(
         if not isinstance(event, dict):
             return
         if event.get("type") == "turn_start":
-            if model_turn_count >= MAX_PI_MODEL_TURNS:
+            if max_turns is not None and model_turn_count >= max_turns:
                 stop("step_limit")
             else:
                 model_turn_count += 1

@@ -69,6 +69,12 @@ experiments/new_datasets/*/store.sqlite3
 experiments/new_datasets/*/jobs.db/
 # Raw branch trajectory captures -- same sensitivity class as traces/ above.
 experiments/new_datasets/w4_branch/dataset_b_run/
+# Pi campaign generated datasets and runtime captures
+experiments/new_datasets/w3_capture/pi_dataset_ac_v1/
+experiments/new_datasets/w4_branch/pi_dataset_b_v1/
+experiments/new_datasets/campaigns/
+experiments/new_datasets/w3_capture/timeout_recovery_v2/
+experiments/new_datasets/w3_capture/harness_ab_pi_v1/
 # Superseded scratch rounds from an earlier dedup/candidate-selection pass.
 eval-suite/swebench/instances_candidates_round2/
 eval-suite/swebench/instances_candidates_round3/
