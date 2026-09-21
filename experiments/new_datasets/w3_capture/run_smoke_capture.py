@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,6 +51,37 @@ POLICIES = {
 
 MAX_ACTIVE_SECONDS = 1200
 CLAUDE_TIMEOUT_EXTRA_S = 60
+MAX_IDENTICAL_ACTION_REPEATS = 4
+
+
+@dataclass(frozen=True)
+class ClaudeRunResult:
+    stdout: str
+    returncode: int | None
+    termination_reason: str
+    max_token_responses: int = 0
+    repeated_action_count: int = 0
+    repeated_action_signature: str | None = None
+
+    @property
+    def timed_out(self) -> bool:
+        return self.termination_reason == "trajectory_deadline"
+
+    def __iter__(self):
+        """Keep older capture drivers source-compatible while they migrate."""
+        yield self.stdout
+        yield self.returncode
+        yield self.timed_out
+
+    def metadata(self) -> dict:
+        return {
+            "claude_returncode": self.returncode,
+            "claude_timed_out": self.timed_out,
+            "claude_termination_reason": self.termination_reason,
+            "claude_max_token_responses": self.max_token_responses,
+            "claude_repeated_action_count": self.repeated_action_count,
+            "claude_repeated_action_signature": self.repeated_action_signature,
+        }
 
 
 def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -109,7 +141,7 @@ def setup_container(name: str) -> None:
 
 
 def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: str, timeout_s: int,
-               out_path: Path) -> tuple[str, int | None, bool]:
+               out_path: Path) -> ClaudeRunResult:
     # The token is supplied through stdin to a shell variable, never in argv
     # -- an argv value is visible to any local `ps aux`, and (as happened
     # once) gets printed verbatim into any TimeoutExpired traceback.
@@ -144,6 +176,41 @@ def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: st
     # was actually produced survives regardless of how the kill goes.
     lines: list[str] = []
     stderr_chunks: list[str] = []
+    repeated_action_event = threading.Event()
+    max_token_responses = 0
+    repeated_action_count = 0
+    repeated_action_signature: str | None = None
+
+    def _observe_assistant_event(line: str) -> None:
+        nonlocal max_token_responses, repeated_action_count, repeated_action_signature
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if event.get("type") != "assistant" or not isinstance(event.get("message"), dict):
+            return
+        message = event["message"]
+        stop_reason = message.get("stop_reason")
+        if stop_reason == "max_tokens":
+            max_token_responses += 1
+        if not isinstance(message.get("content"), list):
+            return
+        actions = [
+            {"name": block.get("name"), "input": block.get("input")}
+            for block in message["content"]
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        if not actions:
+            return
+        signature = json.dumps(actions, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if signature == repeated_action_signature:
+            repeated_action_count += 1
+        else:
+            repeated_action_signature = signature
+            repeated_action_count = 1
+        if repeated_action_count >= MAX_IDENTICAL_ACTION_REPEATS:
+            repeated_action_event.set()
+            proc.kill()
 
     def _drain_stdout() -> None:
         with out_path.open("w") as f:
@@ -151,6 +218,7 @@ def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: st
                 lines.append(line)
                 f.write(line)
                 f.flush()
+                _observe_assistant_event(line)
 
     def _drain_stderr() -> None:
         # A zombied docker-exec client (confirmed to happen: it can survive
@@ -165,13 +233,15 @@ def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: st
     stdout_reader.start()
     stderr_reader.start()
 
-    timed_out = False
+    termination_reason = "completed"
     try:
         returncode = proc.wait(timeout=hard_timeout)
+        if repeated_action_event.is_set():
+            termination_reason = "repeated_action"
         stdout_reader.join(timeout=10)
         stderr_reader.join(timeout=10)
     except subprocess.TimeoutExpired:
-        timed_out = True
+        termination_reason = "trajectory_deadline"
         proc.kill()
         try:
             returncode = proc.wait(timeout=30)
@@ -187,7 +257,14 @@ def run_claude(name: str, prompt: str, base_url: str, model: str, session_id: st
     stderr = "".join(stderr_chunks)
     if stderr:
         sys.stderr.write(f"[claude stderr for {name}]\n{stderr[-3000:]}\n")
-    return "".join(lines), returncode, timed_out
+    return ClaudeRunResult(
+        stdout="".join(lines),
+        returncode=returncode,
+        termination_reason=termination_reason,
+        max_token_responses=max_token_responses,
+        repeated_action_count=repeated_action_count,
+        repeated_action_signature=repeated_action_signature,
+    )
 
 
 def extract_patch(name: str) -> str:
@@ -245,7 +322,7 @@ def main() -> None:
             (run_dir / "prompt.txt").write_text(prompt)
 
             t_claude_start = time.time()
-            stdout, returncode, timed_out = run_claude(
+            result = run_claude(
                 name, prompt, cfg["base_url"], cfg["model"], session_id, MAX_ACTIVE_SECONDS,
                 run_dir / "claude_stream.jsonl",
             )
@@ -265,8 +342,7 @@ def main() -> None:
                 "execution_order": {"seed": run_seed, "policies_in_order": [p for p, _ in order]},
                 "container_setup_seconds": round(t_setup_done - t_container_start, 2),
                 "claude_wall_seconds": round(t_claude_end - t_claude_start, 2),
-                "claude_returncode": returncode,
-                "claude_timed_out": timed_out,
+                **result.metadata(),
                 "patch_nonempty": bool(patch.strip()),
                 "patch_bytes": len(patch),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),

@@ -45,13 +45,23 @@ class RouterConfigurationTests(unittest.TestCase):
             margin=0.9,
             output_reserve_tokens=512,
         )
-
         self.assertEqual(
             policy.effective_max_tokens(
                 self._features(local_prompt_tokens=70_000, max_tokens=64_000)
             ),
             19_488,
         )
+
+    def test_explicit_local_output_cap_bounds_context_headroom(self):
+        policy = router.StaticPolicy(
+            max_local_tokens=100_000,
+            margin=0.9,
+            max_output_tokens=8_192,
+        )
+
+        features = self._features(local_prompt_tokens=20_000, max_tokens=32_000)
+        self.assertEqual(policy.effective_max_tokens(features), 8_192)
+        self.assertEqual(policy.decide(features).placement, "local")
 
     def test_no_output_headroom_routes_cloud(self):
         policy = router.StaticPolicy(max_local_tokens=100_000, margin=0.9)
@@ -101,6 +111,10 @@ class RouterConfigurationTests(unittest.TestCase):
                 "0.9",
                 "--local-output-reserve-tokens",
                 "0",
+                "--local-max-output-tokens",
+                "8192",
+                "--local-thinking",
+                "disabled",
                 "--local-concurrency-limit",
                 "6",
                 "--experiment-id",
@@ -116,6 +130,8 @@ class RouterConfigurationTests(unittest.TestCase):
         self.assertEqual(config.max_local_tokens, 100_000)
         self.assertEqual(config.local_token_margin, 0.9)
         self.assertEqual(config.local_output_reserve_tokens, 0)
+        self.assertEqual(config.local_max_output_tokens, 8_192)
+        self.assertEqual(config.local_thinking, "disabled")
         self.assertEqual(config.local_concurrency_limit, 6)
         self.assertEqual(config.experiment_id, "fanout-1")
         self.assertEqual(config.episode_id, "fanout-1-routing")
@@ -124,6 +140,15 @@ class RouterConfigurationTests(unittest.TestCase):
 
     def test_proxy_cli_defaults_to_300ms_cohort_window(self):
         self.assertEqual(parse_args([]).cohort_window_ms, 300)
+
+    def test_local_generation_safety_defaults_preserve_historical_behavior(self):
+        config = parse_args([])
+        self.assertEqual(config.local_max_output_tokens, 0)
+        self.assertEqual(config.local_thinking, "preserve")
+
+    def test_proxy_cli_rejects_negative_local_output_cap(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--local-max-output-tokens", "-1"])
 
     def test_proxy_cli_defaults_to_eight_local_concurrent_requests(self):
         self.assertEqual(parse_args([]).local_concurrency_limit, 8)

@@ -44,6 +44,10 @@ class Config:
     max_local_tokens: int = 60_000
     local_token_margin: float = 0.9
     local_output_reserve_tokens: int = 0
+    # Optional latency-oriented cap applied only to local generations. Zero
+    # preserves the historical context-headroom-only behaviour.
+    local_max_output_tokens: int = 0
+    local_thinking: str = "preserve"
     local_concurrency_limit: int = 8
     local_cache_salt_scope: str = "off"
     agentic_shadow_artifact: Path | None = None
@@ -193,6 +197,21 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="extra tokens left unused after the local safety-margin budget",
     )
     p.add_argument(
+        "--local-max-output-tokens",
+        type=int,
+        default=int(env("EDGEPROXY_LOCAL_MAX_OUTPUT_TOKENS", "0")),
+        help=(
+            "optional per-call local generation cap; 0 preserves the client's "
+            "requested allowance subject only to context headroom"
+        ),
+    )
+    p.add_argument(
+        "--local-thinking",
+        default=env("EDGEPROXY_LOCAL_THINKING", "preserve"),
+        choices=["preserve", "disabled"],
+        help="preserve client thinking controls or disable Qwen thinking locally",
+    )
+    p.add_argument(
         "--local-concurrency-limit",
         type=int,
         default=int(env("EDGEPROXY_LOCAL_CONCURRENCY_LIMIT", "8")),
@@ -220,6 +239,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         p.error("--local-token-margin must be greater than 0 and at most 1")
     if a.local_output_reserve_tokens < 0:
         p.error("--local-output-reserve-tokens must be non-negative")
+    if a.local_max_output_tokens < 0:
+        p.error("--local-max-output-tokens must be non-negative")
     if a.local_concurrency_limit <= 0:
         p.error("--local-concurrency-limit must be positive")
     if a.cohort_window_ms < 0:
@@ -264,6 +285,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         max_local_tokens=a.max_local_tokens,
         local_token_margin=a.local_token_margin,
         local_output_reserve_tokens=a.local_output_reserve_tokens,
+        local_max_output_tokens=a.local_max_output_tokens,
+        local_thinking=a.local_thinking,
         local_concurrency_limit=a.local_concurrency_limit,
         local_cache_salt_scope=a.local_cache_salt_scope,
     )

@@ -388,11 +388,13 @@ class StaticPolicy:
         margin: float = 0.9,
         local_can_tool_call: bool = True,
         output_reserve_tokens: int = 0,
+        max_output_tokens: int = 0,
     ) -> None:
         self.max_local_tokens = max_local_tokens
         self.margin = margin
         self.local_can_tool_call = local_can_tool_call
         self.output_reserve_tokens = output_reserve_tokens
+        self.max_output_tokens = max_output_tokens
 
     def budget(self) -> int:
         return int(self.max_local_tokens * self.margin)
@@ -411,7 +413,10 @@ class StaticPolicy:
             0,
             self.budget() - f.local_prompt_tokens - self.output_reserve_tokens,
         )
-        return min(f.max_tokens, headroom)
+        requested = min(f.max_tokens, headroom)
+        if self.max_output_tokens > 0:
+            requested = min(requested, self.max_output_tokens)
+        return requested
 
     def decide(self, f: CallFeatures) -> Decision:
         # This is a Claude Code control-plane sidecall, not an ordinary agent
@@ -489,7 +494,10 @@ class LocalOnly(StaticPolicy):
             # keep max_tokens strictly below the context window. budget already
             # carries the safety margin.
             headroom = budget - 1
-        return max(1, min(f.max_tokens, headroom))
+        requested = min(f.max_tokens, headroom)
+        if self.max_output_tokens > 0:
+            requested = min(requested, self.max_output_tokens)
+        return max(1, requested)
 
 
 class WarmLocalPolicy(StaticPolicy):
@@ -1122,6 +1130,7 @@ def build(
     max_local_tokens: int = 60_000,
     margin: float = 0.9,
     output_reserve_tokens: int = 0,
+    max_output_tokens: int = 0,
 ) -> Policy:
     try:
         policy_type = POLICIES[name]
@@ -1132,5 +1141,6 @@ def build(
             max_local_tokens=max_local_tokens,
             margin=margin,
             output_reserve_tokens=output_reserve_tokens,
+            max_output_tokens=max_output_tokens,
         )
     return policy_type()

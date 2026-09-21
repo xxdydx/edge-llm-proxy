@@ -8,6 +8,7 @@ subprocess.Popen stands in.
 from __future__ import annotations
 
 import subprocess
+import json
 import sys
 import time
 import unittest
@@ -92,6 +93,40 @@ class RunClaudeCaptureTests(unittest.TestCase):
         self.assertEqual(out_path.read_text(), "".join(lines))
         self.assertFalse(timed_out)
         self.assertEqual(returncode, 0)
+
+    def test_records_max_token_responses(self):
+        event = json.dumps({
+            "type": "assistant",
+            "message": {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "x"}]},
+        }) + "\n"
+        with patch.object(m.subprocess, "Popen", return_value=_FakeProc([event])):
+            result = m.run_claude(
+                "fake-container", "prompt", "http://x", "local", "sid", timeout_s=10,
+                out_path=Path("/tmp/test_run_claude_max_tokens.jsonl"),
+            )
+        self.assertEqual(result.max_token_responses, 1)
+        self.assertEqual(result.termination_reason, "completed")
+
+    def test_repeated_identical_action_is_stopped_and_classified(self):
+        event = json.dumps({
+            "type": "assistant",
+            "message": {
+                # Real Claude Code stream-json tool events have null here;
+                # the tool block, not stop_reason, identifies the action.
+                "stop_reason": None,
+                "content": [{"type": "tool_use", "id": "ignored", "name": "Bash", "input": {"command": "grep x y"}}],
+            },
+        }) + "\n"
+        fake = _FakeProc([event] * m.MAX_IDENTICAL_ACTION_REPEATS, exit_after_s=None)
+        with patch.object(m.subprocess, "Popen", return_value=fake):
+            result = m.run_claude(
+                "fake-container", "prompt", "http://x", "local", "sid", timeout_s=10,
+                out_path=Path("/tmp/test_run_claude_repeated_action.jsonl"),
+            )
+        self.assertEqual(result.termination_reason, "repeated_action")
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.repeated_action_count, m.MAX_IDENTICAL_ACTION_REPEATS)
+        self.assertEqual(result.returncode, -9)
 
     def test_partial_output_survives_a_clean_kill(self):
         lines = [f"line{i}\n" for i in range(200)]

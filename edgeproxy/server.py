@@ -90,7 +90,9 @@ LOCAL_TEMPERATURE = 0
 LOCAL_REASONING_EFFORT_ALIASES = {"high": "medium"}
 
 
-def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any, int]:
+def _apply_local_generation_controls(
+    request_json: dict[str, Any], *, disable_thinking: bool = False
+) -> tuple[Any, int]:
     """Make local sampling deterministic and opt client tools into constraints.
 
     vLLM only enables schema-constrained decoding for automatic tool choice when
@@ -113,6 +115,13 @@ def _apply_local_generation_controls(request_json: dict[str, Any]) -> tuple[Any,
         effort = output_config.get("effort")
         if effort in LOCAL_REASONING_EFFORT_ALIASES:
             output_config["effort"] = LOCAL_REASONING_EFFORT_ALIASES[effort]
+
+    if disable_thinking:
+        chat_template_kwargs = request_json.setdefault("chat_template_kwargs", {})
+        if not isinstance(chat_template_kwargs, dict):
+            chat_template_kwargs = {}
+            request_json["chat_template_kwargs"] = chat_template_kwargs
+        chat_template_kwargs["enable_thinking"] = False
 
     strict_tools_added = 0
     for tool in request_json.get("tools") or []:
@@ -200,6 +209,7 @@ def make_app(cfg: Config) -> FastAPI:
         max_local_tokens=cfg.max_local_tokens,
         margin=cfg.local_token_margin,
         output_reserve_tokens=cfg.local_output_reserve_tokens,
+        max_output_tokens=cfg.local_max_output_tokens,
     )
     agentic_history = AgenticHistory() if cfg.agentic_shadow_artifact is not None else None
     agentic_shadow = None
@@ -212,6 +222,7 @@ def make_app(cfg: Config) -> FastAPI:
             max_local_tokens=cfg.max_local_tokens,
             margin=cfg.local_token_margin,
             output_reserve_tokens=cfg.local_output_reserve_tokens,
+            max_output_tokens=cfg.local_max_output_tokens,
             harm_scorer=scorer,
             baseline_policy=policy,
             shadow=True,
@@ -295,6 +306,8 @@ def make_app(cfg: Config) -> FastAPI:
             "max_local_tokens": cfg.max_local_tokens,
             "local_token_margin": cfg.local_token_margin,
             "local_output_reserve_tokens": cfg.local_output_reserve_tokens,
+            "local_max_output_tokens": cfg.local_max_output_tokens,
+            "local_thinking": cfg.local_thinking,
             "local_concurrency_limit": cfg.local_concurrency_limit,
             "effective_local_token_budget": int(
                 cfg.max_local_tokens * cfg.local_token_margin
@@ -433,7 +446,10 @@ def make_app(cfg: Config) -> FastAPI:
                     # controls are local-only and the original cloud request
                     # must remain untouched until placement is known.
                     local_probe_request = copy.deepcopy(request_json)
-                    _apply_local_generation_controls(local_probe_request)
+                    _apply_local_generation_controls(
+                        local_probe_request,
+                        disable_thinking=cfg.local_thinking == "disabled",
+                    )
                     local_probe_request["model"] = cfg.local_model_name
                     if local_cache_salt is not None:
                         local_probe_request["cache_salt"] = local_cache_salt
@@ -573,7 +589,10 @@ def make_app(cfg: Config) -> FastAPI:
                 # Local-only rewrites; cloud gets the request exactly as sent.
                 if placement == "local":
                     original_temperature, strict_tools_added = (
-                        _apply_local_generation_controls(request_json)
+                        _apply_local_generation_controls(
+                            request_json,
+                            disable_thinking=cfg.local_thinking == "disabled",
+                        )
                     )
 
                     if request_json.get("model") != cfg.local_model_name:
@@ -663,6 +682,8 @@ def make_app(cfg: Config) -> FastAPI:
                 else None
             ),
             "output_reserve_tokens": cfg.local_output_reserve_tokens,
+            "local_max_output_tokens": cfg.local_max_output_tokens,
+            "local_thinking": cfg.local_thinking,
             "original_model": original_model,
             "original_temperature": original_temperature,
             "strict_tools_added": strict_tools_added,

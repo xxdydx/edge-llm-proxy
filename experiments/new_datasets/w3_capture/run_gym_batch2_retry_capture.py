@@ -79,8 +79,8 @@ def main() -> None:
             (run_dir / "prompt.txt").write_text(prompt)
 
             t2 = time.time()
-            stdout, returncode, timed_out = m.run_claude(name, prompt, cfg["base_url"], cfg["model"], session_id, RETRY_MAX_ACTIVE_SECONDS,
-                                                          run_dir / "claude_stream.jsonl")
+            result = m.run_claude(name, prompt, cfg["base_url"], cfg["model"], session_id, RETRY_MAX_ACTIVE_SECONDS,
+                                  run_dir / "claude_stream.jsonl")
             t3 = time.time()
 
             patch = m.extract_patch(name)
@@ -94,7 +94,7 @@ def main() -> None:
                 "max_active_seconds": RETRY_MAX_ACTIVE_SECONDS,
                 "container_setup_seconds": round(t1 - t0, 2),
                 "claude_wall_seconds": round(t3 - t2, 2),
-                "claude_returncode": returncode, "claude_timed_out": timed_out,
+                **result.metadata(),
                 "patch_nonempty": bool(patch.strip()), "patch_bytes": len(patch),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }

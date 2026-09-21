@@ -128,6 +128,20 @@ class ServerLocalCacheIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(request["output_config"]["effort"], "medium")
 
+    async def test_local_controls_can_disable_thinking_without_mutating_effort(self):
+        request = {
+            "output_config": {"effort": "medium"},
+            "chat_template_kwargs": {"existing": "kept"},
+        }
+
+        _apply_local_generation_controls(request, disable_thinking=True)
+
+        self.assertEqual(request["output_config"]["effort"], "medium")
+        self.assertEqual(
+            request["chat_template_kwargs"],
+            {"existing": "kept", "enable_thinking": False},
+        )
+
     async def test_probe_failure_falls_back_to_cloud(self):
         with tempfile.TemporaryDirectory() as directory:
             trace_dir = Path(directory)
