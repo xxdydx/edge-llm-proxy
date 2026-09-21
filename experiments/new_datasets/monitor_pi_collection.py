@@ -247,7 +247,7 @@ def inspect_cell(
             pass
 
     # Inspect stream file
-    streams = list(cell_dir.glob("*stream*.jsonl"))
+    streams = list(cell_dir.glob("*stream*.jsonl")) + list(cell_dir.glob("*/*stream*.jsonl"))
     stream_info = None
     if streams:
         newest = max(streams, key=lambda s: s.stat().st_mtime)
@@ -267,17 +267,27 @@ def inspect_cell(
         else:
             capture_status = "pending"
         censored_reason = None
+    elif run_meta.get("status") == "pending":
+        if stream_info and stream_info["fresh"]:
+            capture_status = "running"
+        else:
+            capture_status = "pending"
+        censored_reason = None
+    elif run_meta.get("status") == "running":
+        capture_status = "running"
+        censored_reason = None
     else:
-        term_reason = run_meta.get("termination_reason", "completed")
-        if term_reason in CENSORED_REASONS:
+        term_reason = run_meta.get("termination_reason")
+        classification = run_meta.get("classification")
+        if term_reason in CENSORED_REASONS or classification in ("timeout", "repeat"):
             capture_status = "censored"
-            censored_reason = term_reason
-        elif term_reason == "completed":
+            censored_reason = term_reason or classification
+        elif term_reason == "completed" or run_meta.get("status") == "completed":
             capture_status = "completed"
             censored_reason = None
         else:
             # Check for error or timeout indication
-            if run_meta.get("timeout") or run_meta.get("status") == "timeout":
+            if run_meta.get("timed_out") or run_meta.get("status") == "timeout":
                 capture_status = "censored"
                 censored_reason = "trajectory_deadline"
             else:
